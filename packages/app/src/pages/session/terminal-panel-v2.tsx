@@ -21,6 +21,7 @@ import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { useSettings } from "@/context/settings"
 import { useTerminal } from "@/context/terminal"
+import { createTerminalFocusCleanup } from "@/context/terminal-focus"
 import { useSDK } from "@/context/sdk"
 import { terminalTabLabel } from "@/pages/session/terminal-label"
 import { createSizing, focusTerminalById } from "@/pages/session/helpers"
@@ -45,7 +46,7 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
   let root: HTMLDivElement | undefined
   let tabList: HTMLDivElement | undefined
 
-  onCleanup(() => terminal.cancelFocus())
+  createTerminalFocusCleanup(terminal.bind)
 
   const [store, setStore] = createStore({
     autoCreated: false,

@@ -6,6 +6,7 @@ import {
   Component,
   Show,
   onCleanup,
+  onMount,
   createMemo,
   createSignal,
   createResource,
@@ -506,6 +507,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const restoreFocus = () => {
     requestAnimationFrame(() => {
+      if (!editorRef.isConnected || composing()) return
       const cursor = savedCursor ?? prompt.cursor() ?? promptLength(prompt.current())
       editorRef.focus()
       setCursorPosition(editorRef, cursor)
@@ -516,11 +518,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const handleFocus = () => {
     if (!restoreEndOnFocus) return
     restoreEndOnFocus = false
-    requestAnimationFrame(() => {
-      if (document.activeElement !== editorRef) return
-      setCursorPosition(editorRef, prompt.cursor() ?? promptLength(prompt.current()))
-      queueScroll()
-    })
+    // Restore before the first keystroke. A deferred selection change can commit
+    // the first IME syllable while the user is still composing it.
+    if (composing()) return
+    setCursorPosition(editorRef, prompt.cursor() ?? promptLength(prompt.current()))
+    queueScroll()
   }
 
   const renderEditorWithCursor = (parts: Prompt) => {
@@ -1194,8 +1196,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const showVariantControl = createMemo(() => props.controls.model.selection.variant.list().length > 0)
   const accepting = createMemo(() => {
     const id = props.controls.session.id
-    if (!id) return permission.isAutoAcceptingDirectory(sdk().directory)
-    return permission.isAutoAccepting(id, sdk().directory)
+    return permission.isAutoAccepting()
   })
 
   const { abort, handleSubmit } =
@@ -1432,6 +1433,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     restoreEndOnFocus = true
     props.ref?.(el)
   }
+  onMount(() => {
+    if (props.controls.session.id || dialog.active) return
+    const active = document.activeElement
+    if (active && active !== document.body && active !== document.documentElement) return
+    editorRef.focus({ preventScroll: true })
+  })
   return (
     <div class="relative size-full flex flex-col gap-0">
       {(promptReady(), null)}
@@ -1464,6 +1471,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         onSubmit={handleSubmit}
         classList={{
           "group/prompt-input": true,
+          "rounded-[14px] border border-border-weak-base bg-background-base shadow-[0_8px_30px_rgb(0_0_0/0.06)] transition-colors focus-within:border-border-base": true,
           "border-icon-info-active border-dashed": store.draggingType !== null,
           [props.class ?? ""]: !!props.class,
         }}
@@ -1534,7 +1542,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               onKeyDown={handleKeyDown}
               classList={{
                 "select-text": true,
-                "w-full pl-3 pr-2 pt-2 text-14-regular text-text-strong focus:outline-none whitespace-pre-wrap": true,
+                "w-full px-4 pt-3 text-15-regular text-text-strong focus:outline-none whitespace-pre-wrap": true,
                 "[&_[data-type=file]]:text-syntax-property": true,
                 "[&_[data-type=agent]]:text-syntax-type": true,
                 "font-mono!": store.mode === "shell",
@@ -1542,7 +1550,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               style={{ "padding-bottom": space }}
             />
             <div
-              class="absolute top-0 inset-x-0 pl-3 pr-2 pt-2 text-14-regular text-text-weak pointer-events-none whitespace-nowrap truncate"
+              class="absolute top-0 inset-x-0 px-4 pt-3 text-15-regular text-text-weak pointer-events-none whitespace-nowrap truncate"
               classList={{ "font-mono!": store.mode === "shell" }}
               style={{ "padding-bottom": space, display: prompt.dirty() ? "none" : undefined }}
             >

@@ -4,6 +4,8 @@ import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
 import type * as ModelsDev from "@opencode-ai/core/models-dev"
 import { iife } from "@/util/iife"
+import { Schema } from "effect"
+import { ConfigProviderV1 } from "@opencode-ai/core/v1/config/provider"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -21,6 +23,7 @@ export const OUTPUT_TOKEN_MAX = 32_000
 // needed for stateless multi-turn reasoning (store: false). Hoisted so every
 // branch that requests it stays in lockstep.
 const INCLUDE_ENCRYPTED_REASONING = ["reasoning.encrypted_content"] as const
+const isReasoningCapabilities = Schema.is(ConfigProviderV1.ReasoningCapabilities)
 
 export function sanitizeSurrogates(content: string) {
   return content.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD")
@@ -463,6 +466,32 @@ function mapProviderOptions(
 }
 
 export function message(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>) {
+  const reasoning = configuredReasoning(model)
+  if (reasoning?.canIOReasoning === false) {
+    msgs = msgs.map((msg) =>
+      msg.role !== "assistant" || !Array.isArray(msg.content)
+        ? msg
+        : {
+            ...msg,
+            content: msg.content.filter((part) => part.type !== "reasoning"),
+          },
+    )
+  }
+  const role = systemMessageMode(model.options?.supportsSystemMessage)
+  if (role === "remove") msgs = msgs.filter((msg) => msg.role !== "system")
+  if (role && role !== "remove" && model.api.npm === "@ai-sdk/openai-compatible") {
+    msgs = msgs.map((msg) =>
+      msg.role !== "system"
+        ? msg
+        : {
+            ...msg,
+            providerOptions: {
+              ...msg.providerOptions,
+              openaiCompatible: { ...msg.providerOptions?.openaiCompatible, role },
+            },
+          },
+    )
+  }
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
   const usesAnthropicAutomaticCaching =
@@ -776,6 +805,14 @@ function googleThinkingVariants(model: Provider.Model): Record<string, Record<st
 
 export function variants(model: Provider.Model): Record<string, Record<string, any>> {
   if (!model.capabilities.reasoning) return {}
+  const configured = configuredReasoning(model)
+  if (configured?.reasoningSlider) {
+    return Object.fromEntries(
+      configured.reasoningSlider.values
+        .filter((effort) => configured.canTurnOffReasoning || effort !== "none")
+        .map((effort) => [effort, reasoningEffort(model, effort) ?? { reasoningEffort: effort }]),
+    )
+  }
 
   const id = model.id.toLowerCase()
   const glm52 = ["glm-5.2", "glm-5-2", "glm-5p2"].some(
@@ -1371,7 +1408,38 @@ export function options(input: {
     }
   }
 
+  const configured = configuredReasoning(input.model)
+  if (configured) {
+    if (!configured.supportsReasoning) {
+      delete result.reasoningEffort
+      delete result.reasoningSummary
+      if (Array.isArray(result.include))
+        result.include = result.include.filter((x: unknown) => x !== "reasoning.encrypted_content")
+    }
+    if (configured.supportsReasoning && configured.reasoningSlider) {
+      result.reasoningEffort = configured.reasoningSlider.default
+    }
+  }
   return result
+}
+
+function configuredReasoning(model: Provider.Model) {
+  const value: unknown = model.options?.reasoningCapabilities
+  return isReasoningCapabilities(value) ? value : undefined
+}
+
+export function supportsVariant(model: Provider.Model, variant: Record<string, unknown>) {
+  const configured = configuredReasoning(model)
+  if (!configured || variant.reasoningEffort === undefined) return true
+  if (!configured.supportsReasoning) return false
+  if (variant.reasoningEffort === "none" && !configured.canTurnOffReasoning) return false
+  return !configured.reasoningSlider || configured.reasoningSlider.values.includes(String(variant.reasoningEffort))
+}
+
+function systemMessageMode(value: unknown) {
+  if (value === "developer" || value === "developer-role") return "developer"
+  if (value === "system" || value === "system-role") return "system"
+  if (value === "remove") return "remove"
 }
 
 export function smallOptions(model: Provider.Model) {
@@ -1406,12 +1474,65 @@ const SLUG_OVERRIDES: Record<string, string> = {
 }
 
 export function providerOptions(model: Provider.Model, options: { [x: string]: any }) {
+  // Capability metadata is local configuration, never an arbitrary API request field.
+  const configured = configuredReasoning(model)
+  options = Object.fromEntries(
+    Object.entries(options).filter(
+      ([key]) =>
+        ![
+          "reasoningCapabilities",
+          "supportsSystemMessage",
+          "supportsFIM",
+          "specialToolFormat",
+          "maxOutputTokens",
+          "maxInputTokens",
+          "reservedOutputTokenSpace",
+        ].includes(key),
+    ),
+  )
+  if (configured) {
+    if (!configured.supportsReasoning) {
+      delete options.reasoningEffort
+      delete options.reasoningSummary
+      if (Array.isArray(options.include))
+        options.include = options.include.filter((x: unknown) => x !== "reasoning.encrypted_content")
+    }
+    if (configured.supportsReasoning && (options.reasoningEffort === undefined || !supportsVariant(model, options))) {
+      options.reasoningEffort = configured.reasoningSlider?.default
+    }
+    if (
+      configured.canIOReasoning &&
+      configured.supportsReasoning &&
+      ["@ai-sdk/github-copilot", "@ai-sdk/openai", "@ai-sdk/azure", "@ai-sdk/amazon-bedrock/mantle"].includes(
+        model.api.npm,
+      )
+    ) {
+      options.reasoningSummary ??= "auto"
+      options.include = unique([...(options.include ?? []), ...INCLUDE_ENCRYPTED_REASONING])
+    }
+    if (!configured.canIOReasoning) {
+      delete options.reasoningSummary
+      if (Array.isArray(options.include))
+        options.include = options.include.filter((x: unknown) => x !== "reasoning.encrypted_content")
+    }
+  }
+  if (model.api.npm === "@ai-sdk/github-copilot" && (configured || model.api.endpoint === "responses")) {
+    options.forceReasoning = model.capabilities.reasoning
+    options.supportsTemperature = model.capabilities.temperature
+    options.systemMessageMode = systemMessageMode(model.options?.supportsSystemMessage)
+  }
   const usesOpenAIReasoningGate =
     model.api.npm === "@ai-sdk/openai" ||
     model.api.npm === "@ai-sdk/azure" ||
     model.api.npm === "@ai-sdk/amazon-bedrock/mantle"
+  if (usesOpenAIReasoningGate) {
+    const role = systemMessageMode(model.options?.supportsSystemMessage)
+    if (role) options.systemMessageMode = role
+    if (configured) options.forceReasoning = configured.supportsReasoning
+  }
   const normalized =
     usesOpenAIReasoningGate &&
+    configured?.supportsReasoning !== false &&
     (model.capabilities.reasoning || options.reasoningEffort !== undefined || options.reasoningSummary !== undefined)
       ? { ...options, forceReasoning: true }
       : anthropicBlockBinding(model, options)
@@ -1465,8 +1586,11 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
   return { [key]: normalized }
 }
 
-export function maxOutputTokens(model: Provider.Model, outputTokenMax = OUTPUT_TOKEN_MAX): number {
-  return Math.min(model.limit.output, outputTokenMax) || outputTokenMax
+export function maxOutputTokens(model: Provider.Model, outputTokenMax?: number): number {
+  const configured: unknown = model.options?.maxOutputTokens
+  const requested =
+    typeof configured === "number" && Number.isSafeInteger(configured) && configured > 0 ? configured : OUTPUT_TOKEN_MAX
+  return Math.min(model.limit.output || requested, outputTokenMax ?? requested)
 }
 
 type JsonRecord = Record<string, unknown>

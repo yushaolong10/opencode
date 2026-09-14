@@ -93,9 +93,7 @@ test.describe("timeline visual lifecycle stability", () => {
     await expect(short.locator('[data-slot="collapsible-trigger"]')).toHaveAttribute("aria-expanded", "false")
   })
 
-  test("replaces thinking with streamed reasoning and text without a blank visible turn", async ({
-    page,
-  }, testInfo) => {
+  test("keeps the turn clock alongside streamed reasoning and text until completion", async ({ page }, testInfo) => {
     const reasoningID = "prt_reasoning_visible"
     const textID = "prt_streamed_text"
     const assistant = assistantMessage([], { completed: false })
@@ -120,13 +118,14 @@ test.describe("timeline visual lifecycle stability", () => {
     await expect(page.locator(`[data-timeline-part-id="${reasoningID}"]`)).toHaveCount(0)
     await timeline.send(partUpdated(reasoningPart(reasoningID, "## Planning\n\nChecking the visible timeline.")), 160)
     await timeline.waitForPart(reasoningID)
-    await expect(page.locator('[data-timeline-row="Thinking"]')).toHaveCount(0)
+    await expect(page.locator('[data-timeline-row="Thinking"]')).toBeVisible()
     await timeline.send(partUpdated(textPart(textID, "Starting")), 100)
     await timeline.send(partDelta(textID, " **stable"), 90)
     await timeline.send(partDelta(textID, " output** with `code` and [a link"), 130)
     await timeline.send(partDelta(textID, "](https://example.com)."), 220)
     await timeline.send(messageUpdated(completedAssistantInfo(assistant.info)), 120)
     await timeline.send(status("idle"), 500)
+    await expect(page.locator('[data-timeline-row="Thinking"]')).toHaveCount(0)
     const trace = await stopVisualProbe<keyof typeof regions>(page)
     await reportVisualStability(
       testInfo,
@@ -145,6 +144,11 @@ test.describe("timeline visual lifecycle stability", () => {
       ]),
     )
     await expect(page.locator(`[data-timeline-part-id="${textID}"]`)).toContainText("stable output")
+    await page.mouse.move(0, 0)
+    const footer = page.locator(`[data-timeline-part-id="${textID}"] [data-slot="text-part-copy-wrapper"]`)
+    await expect(footer).toHaveCSS("opacity", "1")
+    await expect(footer.locator('[data-slot="text-part-meta"]')).toContainText("Build · Claude Opus 4.6 ·")
+    await expect(footer.locator('[data-slot="text-part-meta"]')).toBeVisible()
   })
 })
 

@@ -399,6 +399,149 @@ it.effect("updates global config and omits empty shell key in jsonc", () =>
   ),
 )
 
+for (const name of ["opencode.json", "opencode.jsonc"]) {
+  it.effect(`removes a global provider and its allowlist references from ${name}`, () =>
+    withGlobalConfig(
+      {
+        name,
+        config: {
+          provider: {
+            custom: { npm: "@ai-sdk/openai-compatible", models: { model: { name: "Model" } } },
+            keep: { npm: "@ai-sdk/openai-compatible", models: { model: { name: "Model" } } },
+          },
+          disabled_providers: ["custom", "keep"],
+          enabled_providers: ["custom", "keep"],
+        },
+      },
+      ({ dir }) =>
+        Effect.gen(function* () {
+          const result = yield* Config.use.removeGlobalProvider("custom")
+          const file = path.join(dir, name)
+          const written = ConfigParse.schema(
+            ConfigV1.Info,
+            ConfigParse.jsonc(yield* FSUtil.use.readFileString(file), file),
+            file,
+          )
+
+          expect(result.changed).toBe(true)
+          expect(written.provider).not.toHaveProperty("custom")
+          expect(written.provider).toHaveProperty("keep")
+          expect(written.disabled_providers).toEqual(["keep"])
+          expect(written.enabled_providers).toEqual(["keep"])
+        }),
+    ),
+  )
+}
+
+for (const name of ["opencode.json", "opencode.jsonc"]) {
+  it.effect(`patches only selected models and serializes concurrent updates in ${name}`, () =>
+    withGlobalConfig(
+      {
+        name,
+        config: {
+          provider: {
+            custom: {
+              name: "Original",
+              options: { baseURL: "https://example.com", timeout: 10000 },
+              models: { first: { name: "First", options: { stale: true } }, second: { name: "Second" } },
+            },
+          },
+        },
+      },
+      () =>
+        Effect.gen(function* () {
+          const config = yield* Config.Service
+          yield* Effect.all(
+            [
+              config.patchGlobalProvider("custom", { models: { first: { name: "Updated", contextWindow: 200000 } } }),
+              config.patchGlobalProvider("custom", {
+                models: { "org/gpt-6": { name: "GPT-6", contextWindow: 300000 } },
+              }),
+            ],
+            { concurrency: "unbounded" },
+          )
+          const updated = (yield* config.getGlobal()).provider?.custom
+          expect(updated?.models?.first).toEqual({ name: "Updated", contextWindow: 200000 })
+          expect(updated?.models?.second).toEqual({ name: "Second" })
+          expect(updated?.models?.["org/gpt-6"]?.contextWindow).toBe(300000)
+          expect(updated?.options?.timeout).toBe(10000)
+          yield* config.patchGlobalProvider("custom", { settings: { name: "Renamed" }, remove: ["first"] })
+          const final = (yield* config.getGlobal()).provider?.custom
+          expect(final?.name).toBe("Renamed")
+          expect(final?.models?.first).toBeUndefined()
+          expect(final?.models?.second).toBeDefined()
+          expect(final?.models?.["org/gpt-6"]).toBeDefined()
+        }),
+    ),
+  )
+
+  it.effect(`fully replaces a global provider in ${name}`, () =>
+    withGlobalConfig(
+      {
+        name,
+        config: {
+          provider: {
+            custom: {
+              npm: "@ai-sdk/openai-compatible",
+              options: { baseURL: "https://old.example.com", stale: true },
+              models: { old: { name: "Old" }, keep: { name: "Before" } },
+            },
+          },
+          disabled_providers: ["custom", "keep"],
+          enabled_providers: ["keep"],
+        },
+      },
+      ({ dir }) =>
+        Effect.gen(function* () {
+          const result = yield* Config.use.setGlobalProvider("custom", {
+            npm: "@ai-sdk/openai-compatible",
+            name: "Updated",
+            models: {
+              keep: {
+                name: "After",
+                contextWindow: 200000,
+                maxInputTokens: 160000,
+                maxOutputTokens: 64000,
+                reservedOutputTokenSpace: 80000,
+                supportsVision: true,
+                supportsSystemMessage: "developer",
+                provider: { npm: "@ai-sdk/github-copilot", endpoint: "responses" },
+                reasoningCapabilities: {
+                  supportsReasoning: true,
+                  canTurnOffReasoning: false,
+                  canIOReasoning: true,
+                  reasoningSlider: { type: "effort_slider", values: ["high", "xhigh"], default: "high" },
+                },
+              },
+            },
+          })
+          const file = path.join(dir, name)
+          const written = ConfigParse.schema(
+            ConfigV1.Info,
+            ConfigParse.jsonc(yield* FSUtil.use.readFileString(file), file),
+            file,
+          )
+
+          expect(result.changed).toBe(true)
+          expect(written.provider?.custom?.models).not.toHaveProperty("old")
+          expect(written.provider?.custom?.models?.keep?.name).toBe("After")
+          expect(written.provider?.custom?.models?.keep).toMatchObject({
+            maxInputTokens: 160000,
+            maxOutputTokens: 64000,
+            reservedOutputTokenSpace: 80000,
+            provider: { endpoint: "responses" },
+            reasoningCapabilities: { reasoningSlider: { default: "high" } },
+          })
+          const config = yield* Config.Service
+          expect((yield* config.getGlobal()).provider?.custom?.models?.keep?.maxOutputTokens).toBe(64000)
+          expect(written.provider?.custom?.options).toBeUndefined()
+          expect(written.disabled_providers).toEqual(["keep"])
+          expect(written.enabled_providers).toEqual(["keep", "custom"])
+        }),
+    ),
+  )
+}
+
 it.effect("logs global update diagnostics once without exposing values", () =>
   withGlobalConfig(
     {

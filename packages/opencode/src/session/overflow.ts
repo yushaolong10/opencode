@@ -11,6 +11,19 @@ export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outpu
   const context = input.model.limit.context
   if (context === 0) return 0
 
+  const configured: unknown =
+    input.model.options?.reservedOutputTokenSpace ??
+    (input.model.options?.maxOutputTokens || input.model.options?.maxInputTokens ? 0 : undefined)
+  if (typeof configured === "number" && Number.isSafeInteger(configured) && configured >= 0) {
+    return Math.max(
+      0,
+      Math.min(
+        (input.model.limit.input ?? context) - (input.cfg.compaction?.reserved ?? 0),
+        context - Math.max(configured, ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax)),
+      ),
+    )
+  }
+
   const reserved =
     input.cfg.compaction?.reserved ??
     Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))

@@ -165,7 +165,6 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
     responseFormat,
   }: LanguageModelV3CallOptions) {
     const warnings: SharedV3Warning[] = []
-    const modelConfig = getResponsesModelConfig(this.modelId)
 
     if (topK != null) {
       warnings.push({ type: "unsupported", feature: "topK" })
@@ -198,6 +197,14 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       providerOptions,
       schema: openaiResponsesProviderOptionsSchema,
     })
+    const inferred = getResponsesModelConfig(this.modelId)
+    const modelConfig = {
+      ...inferred,
+      isReasoningModel: openaiOptions?.forceReasoning ?? inferred.isReasoningModel,
+      systemMessageMode:
+        openaiOptions?.systemMessageMode ??
+        (openaiOptions?.forceReasoning === true ? "developer" : inferred.systemMessageMode),
+    }
 
     const { input, warnings: inputWarnings } = await convertToOpenAIResponsesInput({
       prompt,
@@ -308,7 +315,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       }),
     }
 
-    if (modelConfig.isReasoningModel) {
+    if (modelConfig.isReasoningModel && openaiOptions?.supportsTemperature !== true) {
       // remove unsupported settings for reasoning models
       // see https://platform.openai.com/docs/guides/reasoning#limitations
       if (baseArgs.temperature != null) {
@@ -328,7 +335,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
           details: "topP is not supported for reasoning models",
         })
       }
-    } else {
+    } else if (!modelConfig.isReasoningModel) {
       if (openaiOptions?.reasoningEffort != null) {
         warnings.push({
           type: "unsupported",
@@ -486,7 +493,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
           ),
           service_tier: z.string().nullish(),
           incomplete_details: z.object({ reason: z.string() }).nullish(),
-          usage: usageSchema,
+          usage: usageSchema.nullish(),
         }),
       ),
       abortSignal: options.abortSignal,
@@ -746,20 +753,20 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       },
       usage: {
         inputTokens: {
-          total: response.usage.input_tokens,
+          total: response.usage?.input_tokens,
           noCache:
-            response.usage.input_tokens_details?.cached_tokens != null
+            response.usage?.input_tokens_details?.cached_tokens != null
               ? response.usage.input_tokens - response.usage.input_tokens_details.cached_tokens
               : undefined,
-          cacheRead: response.usage.input_tokens_details?.cached_tokens ?? undefined,
+          cacheRead: response.usage?.input_tokens_details?.cached_tokens ?? undefined,
           cacheWrite: undefined,
         },
         outputTokens: {
-          total: response.usage.output_tokens,
+          total: response.usage?.output_tokens,
           text: undefined,
-          reasoning: response.usage.output_tokens_details?.reasoning_tokens ?? undefined,
+          reasoning: response.usage?.output_tokens_details?.reasoning_tokens ?? undefined,
         },
-        raw: response.usage,
+        raw: response.usage ?? undefined,
       },
       request: { body },
       response: {
@@ -1266,11 +1273,14 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                 }),
                 raw: value.response.incomplete_details?.reason ?? undefined,
               }
-              usage.inputTokens = value.response.usage.input_tokens
-              usage.outputTokens = value.response.usage.output_tokens
-              usage.totalTokens = value.response.usage.input_tokens + value.response.usage.output_tokens
-              usage.reasoningTokens = value.response.usage.output_tokens_details?.reasoning_tokens ?? undefined
-              usage.cachedInputTokens = value.response.usage.input_tokens_details?.cached_tokens ?? undefined
+              const responseUsage = value.response.usage
+              if (responseUsage) {
+                usage.inputTokens = responseUsage.input_tokens
+                usage.outputTokens = responseUsage.output_tokens
+                usage.totalTokens = responseUsage.input_tokens + responseUsage.output_tokens
+                usage.reasoningTokens = responseUsage.output_tokens_details?.reasoning_tokens ?? undefined
+                usage.cachedInputTokens = responseUsage.input_tokens_details?.cached_tokens ?? undefined
+              }
               if (typeof value.response.service_tier === "string") {
                 serviceTier = value.response.service_tier
               }
@@ -1380,7 +1390,7 @@ const responseFinishedChunkSchema = z.object({
   type: z.enum(["response.completed", "response.incomplete"]),
   response: z.object({
     incomplete_details: z.object({ reason: z.string() }).nullish(),
-    usage: usageSchema,
+    usage: usageSchema.nullish(),
     service_tier: z.string().nullish(),
   }),
 })
@@ -1727,6 +1737,9 @@ function getResponsesModelConfig(modelId: string): ResponsesModelConfig {
 
 // TODO AI SDK 6: use optional here instead of nullish
 const openaiResponsesProviderOptionsSchema = z.object({
+  forceReasoning: z.boolean().optional(),
+  systemMessageMode: z.enum(["system", "developer", "remove"]).optional(),
+  supportsTemperature: z.boolean().optional(),
   include: z
     .array(z.enum(["reasoning.encrypted_content", "file_search_call.results", "message.output_text.logprobs"]))
     .nullish(),

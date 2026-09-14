@@ -1,4 +1,5 @@
 import { Config } from "@/config/config"
+import { Auth } from "@/auth"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -60,6 +61,7 @@ function eventResponse() {
 export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handlers) =>
   Effect.gen(function* () {
     const config = yield* Config.Service
+    const auth = yield* Auth.Service
     const installation = yield* Installation.Service
     const bridge = yield* EffectBridge.make()
 
@@ -78,6 +80,24 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const configUpdate = Effect.fn("GlobalHttpApi.configUpdate")(function* (ctx) {
       const result = yield* config.updateGlobal(ctx.payload)
       if (result.changed) bridge.fork(disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true }))
+      return result.info
+    })
+
+    const configProviderRemove = Effect.fn("GlobalHttpApi.configProviderRemove")(function* (ctx) {
+      const result = yield* config.removeGlobalProvider(ctx.params.providerID)
+      yield* auth.remove(ctx.params.providerID).pipe(Effect.orDie)
+      if (result.changed) bridge.fork(disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true }))
+      return result.info
+    })
+
+    const configProviderSet = Effect.fn("GlobalHttpApi.configProviderSet")(function* (ctx) {
+      const result = yield* config.setGlobalProvider(ctx.params.providerID, ctx.payload)
+      if (result.changed) yield* disposeAllInstancesAndEmitGlobalDisposed()
+      return result.info
+    })
+    const configProviderPatch = Effect.fn("GlobalHttpApi.configProviderPatch")(function* (ctx) {
+      const result = yield* config.patchGlobalProvider(ctx.params.providerID, ctx.payload)
+      if (result.changed) yield* disposeAllInstancesAndEmitGlobalDisposed()
       return result.info
     })
 
@@ -120,6 +140,9 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handleRaw("event", event)
       .handle("configGet", configGet)
       .handle("configUpdate", configUpdate)
+      .handle("configProviderRemove", configProviderRemove)
+      .handle("configProviderSet", configProviderSet)
+      .handle("configProviderPatch", configProviderPatch)
       .handle("dispose", dispose)
       .handle("upgrade", upgrade)
   }),

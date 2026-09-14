@@ -171,6 +171,16 @@ function selectBedrockMantleLanguageModel(sdk: BundledSDK, modelID: string) {
   return sdk.responses?.(modelID) ?? sdk.languageModel(modelID)
 }
 
+function selectEndpointLanguageModel(
+  sdk: SDK | BundledSDK,
+  modelID: string,
+  endpoint?: "chat" | "responses" | "messages",
+) {
+  if (endpoint === "responses" && "responses" in sdk && sdk.responses) return sdk.responses(modelID)
+  if (endpoint === "chat" && "chat" in sdk && sdk.chat) return sdk.chat(modelID)
+  return sdk.languageModel(modelID)
+}
+
 function custom(dep: CustomDep): Record<string, CustomLoader> {
   return {
     anthropic: () =>
@@ -1008,6 +1018,7 @@ const ProviderApiInfo = Schema.Struct({
   id: Schema.String,
   url: Schema.String,
   npm: Schema.String,
+  endpoint: Schema.optional(Schema.Literals(["chat", "responses", "messages"])),
 })
 
 const ProviderModalities = Schema.Struct({
@@ -1513,19 +1524,28 @@ const layer = Layer.effect(
                 id: apiID,
                 npm: apiNpm,
                 url: model.provider?.api ?? provider?.api ?? existingModel?.api.url ?? modelsDev[providerID]?.api ?? "",
+                endpoint: model.provider?.endpoint ?? existingModel?.api.endpoint,
               },
               status: model.status ?? existingModel?.status ?? "active",
               name,
               providerID: ProviderV2.ID.make(providerID),
               capabilities: {
                 temperature: model.temperature ?? existingModel?.capabilities.temperature ?? false,
-                reasoning: model.reasoning ?? existingModel?.capabilities.reasoning ?? false,
+                reasoning:
+                  model.reasoningCapabilities?.supportsReasoning ??
+                  model.reasoning ??
+                  existingModel?.capabilities.reasoning ??
+                  false,
                 attachment: model.attachment ?? existingModel?.capabilities.attachment ?? false,
                 toolcall: model.tool_call ?? existingModel?.capabilities.toolcall ?? true,
                 input: {
                   text: model.modalities?.input?.includes("text") ?? existingModel?.capabilities.input.text ?? true,
                   audio: model.modalities?.input?.includes("audio") ?? existingModel?.capabilities.input.audio ?? false,
-                  image: model.modalities?.input?.includes("image") ?? existingModel?.capabilities.input.image ?? false,
+                  image:
+                    model.supportsVision ??
+                    model.modalities?.input?.includes("image") ??
+                    existingModel?.capabilities.input.image ??
+                    false,
                   video: model.modalities?.input?.includes("video") ?? existingModel?.capabilities.input.video ?? false,
                   pdf: model.modalities?.input?.includes("pdf") ?? existingModel?.capabilities.input.pdf ?? false,
                 },
@@ -1554,11 +1574,27 @@ const layer = Layer.effect(
                   write: model?.cost?.cache_write ?? existingModel?.cost?.cache.write ?? 0,
                 },
               },
-              options: mergeDeep(existingModel?.options ?? {}, model.options ?? {}),
+              options: mergeDeep(existingModel?.options ?? {}, {
+                ...model.options,
+                ...(model.supportsSystemMessage ? { supportsSystemMessage: model.supportsSystemMessage } : {}),
+                ...(model.reasoningCapabilities
+                  ? {
+                      reasoningCapabilities: model.reasoningCapabilities,
+                      ...(model.reasoningCapabilities.supportsReasoning && model.reasoningCapabilities.reasoningSlider
+                        ? { reasoningEffort: model.reasoningCapabilities.reasoningSlider.default }
+                        : {}),
+                    }
+                  : {}),
+                ...(model.maxOutputTokens !== undefined ? { maxOutputTokens: model.maxOutputTokens } : {}),
+                ...(model.maxInputTokens !== undefined ? { maxInputTokens: model.maxInputTokens } : {}),
+                ...(model.reservedOutputTokenSpace !== undefined
+                  ? { reservedOutputTokenSpace: model.reservedOutputTokenSpace }
+                  : {}),
+              }),
               limit: {
-                context: model.limit?.context ?? existingModel?.limit?.context ?? 0,
-                input: model.limit?.input ?? existingModel?.limit?.input,
-                output: model.limit?.output ?? existingModel?.limit?.output ?? 0,
+                context: model.contextWindow || model.limit?.context || existingModel?.limit?.context || 0,
+                input: model.maxInputTokens ?? model.limit?.input ?? existingModel?.limit?.input,
+                output: model.maxOutputTokens ?? model.limit?.output ?? existingModel?.limit?.output ?? 0,
               },
               headers: mergeDeep(existingModel?.headers ?? {}, model.headers ?? {}),
               family: model.family ?? existingModel?.family ?? "",
@@ -1566,12 +1602,12 @@ const layer = Layer.effect(
               variants: {},
             }
             const variants =
-              existingModel?.api.npm === parsedModel.api.npm
+              !model.reasoningCapabilities && existingModel?.api.npm === parsedModel.api.npm
                 ? (existingModel.variants ?? ProviderTransform.variants(parsedModel))
                 : ProviderTransform.variants(parsedModel)
             const merged = mergeDeep(variants, model.variants ?? {})
             parsedModel.variants = mapValues(
-              pickBy(merged, (v) => !v.disabled),
+              pickBy(merged, (v) => !v.disabled && ProviderTransform.supportsVariant(parsedModel, v)),
               (v) => omit(v, ["disabled"]),
             )
             parsed.models[modelID] = parsedModel
@@ -1913,7 +1949,7 @@ const layer = Layer.effect(
                 },
                 model,
               )
-            : sdk.languageModel(model.api.id)
+            : selectEndpointLanguageModel(sdk, model.api.id, model.api.endpoint)
           s.models.set(key, language)
           return language
         },

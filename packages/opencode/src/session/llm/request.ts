@@ -158,6 +158,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   }
   if (
     input.model.providerID.includes("github-copilot") &&
+    input.model.capabilities.toolcall &&
     Object.keys(tools).length === 0 &&
     hasToolCalls(input.messages)
   ) {
@@ -205,7 +206,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   }
 })
 
-function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission" | "user">) {
+function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission" | "user" | "model">) {
+  if (!input.model.capabilities.toolcall) return {}
   const disabled = Permission.disabled(
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),

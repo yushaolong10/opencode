@@ -5,6 +5,16 @@ import type { LanguageModelV3Prompt } from "@ai-sdk/provider"
 
 const TEST_PROMPT: LanguageModelV3Prompt = [{ role: "user", content: [{ type: "text", text: "Hello" }] }]
 
+async function convertReadableStreamToArray<T>(stream: ReadableStream<T>): Promise<T[]> {
+  const reader = stream.getReader()
+  const result: T[] = []
+  while (true) {
+    const item = await reader.read()
+    if (item.done) return result
+    result.push(item.value)
+  }
+}
+
 function createMockFetch(body: unknown) {
   return mock(
     async () => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }),
@@ -77,9 +87,81 @@ describe("doGenerate", () => {
     expect(providerMetadata?.copilot?.responseId).toBe("resp_1")
     expect(providerMetadata?.openai).toBeUndefined()
   })
+
+  test("allows compatible providers to omit usage", async () => {
+    const model = createModel(
+      createMockFetch({
+        id: "resp_1",
+        created_at: 0,
+        model: "gpt-5.6-sol",
+        output: [{ type: "message", role: "assistant", id: "msg_1", content: [] }],
+      }),
+    )
+
+    const result = await model.doGenerate({ prompt: TEST_PROMPT, includeRawChunks: false } as any)
+
+    expect(result.usage.inputTokens.total).toBeUndefined()
+    expect(result.usage.outputTokens.total).toBeUndefined()
+    expect(result.usage.raw).toBeUndefined()
+  })
+})
+
+describe("doStream", () => {
+  test("finishes when a compatible provider omits usage", async () => {
+    const mockFetch = mock(async () => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              'data: {"type":"response.completed","response":{"incomplete_details":null,"service_tier":null}}\n\n',
+            ),
+          )
+          controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"))
+          controller.close()
+        },
+      })
+      return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } })
+    })
+    const model = createModel(mockFetch)
+
+    const result = await model.doStream({ prompt: TEST_PROMPT, includeRawChunks: false } as any)
+    const parts = await convertReadableStreamToArray(result.stream)
+    const finish = parts.find((part) => part.type === "finish")
+
+    expect(finish).toMatchObject({
+      type: "finish",
+      finishReason: { unified: "stop" },
+      usage: {
+        inputTokens: { total: undefined },
+        outputTokens: { total: undefined },
+      },
+    })
+  })
 })
 
 describe("convertToOpenAIResponsesInput", () => {
+  test("replays encrypted reasoning without a stale item ID in stateless requests", async () => {
+    const result = await convertToOpenAIResponsesInput({
+      prompt: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "reasoning",
+              text: "Summary",
+              providerOptions: { copilot: { reasoningEncryptedContent: "encrypted" } },
+            },
+          ],
+        },
+      ],
+      systemMessageMode: "developer",
+      store: false,
+    })
+    expect(result.warnings).toEqual([])
+    expect(result.input).toEqual([
+      { type: "reasoning", encrypted_content: "encrypted", summary: [{ type: "summary_text", text: "Summary" }] },
+    ])
+  })
   test("echoes a stale tool-call itemId from the copilot namespace as the function_call id", async () => {
     const { input } = await convertToOpenAIResponsesInput({
       prompt: [

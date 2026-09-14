@@ -52,6 +52,10 @@ function statusWithFetch(
   fetch: typeof globalThis.fetch | undefined,
 ): RuntimeStatus {
   const providerID = input.model.providerID
+  // Native lowering does not yet implement explicit system roles or reasoning capabilities.
+  if (input.model.options?.reasoningCapabilities || input.model.options?.supportsSystemMessage) {
+    return { type: "unsupported", reason: "custom model capabilities require the AI SDK adapter" }
+  }
   if (providerID !== "openai" && providerID !== "anthropic" && !providerID.startsWith("opencode"))
     return { type: "unsupported", reason: "provider is not openai, opencode, or anthropic" }
   const npm = input.model.api.npm

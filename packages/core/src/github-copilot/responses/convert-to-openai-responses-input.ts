@@ -191,6 +191,16 @@ export async function convertToOpenAIResponsesInput({
 
               const reasoningId = providerOptions?.itemId
 
+              // Stateless requests strip stale item IDs, but encrypted reasoning remains replayable.
+              if (!store && reasoningId == null && providerOptions?.reasoningEncryptedContent != null) {
+                input.push({
+                  type: "reasoning",
+                  encrypted_content: providerOptions.reasoningEncryptedContent,
+                  summary: part.text ? [{ type: "summary_text", text: part.text }] : [],
+                })
+                break
+              }
+
               if (reasoningId != null) {
                 const reasoningMessage = reasoningMessages[reasoningId]
 

@@ -1,22 +1,20 @@
 import type { Session } from "@opencode-ai/sdk/v2/client"
-import { Avatar } from "@opencode-ai/ui/avatar"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
-import { getFilename } from "@opencode-ai/core/util/path"
 import { A, useParams } from "@solidjs/router"
 import { type Accessor, createMemo, For, type JSX, Match, Show, Switch } from "solid-js"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
-import { getAvatarColors, type LocalProject, useLayout } from "@/context/layout"
+import { type LocalProject, useLayout } from "@/context/layout"
 import { useNotification } from "@/context/notification"
 import { usePermission } from "@/context/permission"
 import { messageAgentColor } from "@/utils/agent"
 import { sessionTitle } from "@/utils/session-title"
 import { sessionPermissionRequest } from "../session/composer/session-request-tree"
-import { childSessionOnPath, getProjectAvatarSource, hasProjectPermissions } from "./helpers"
+import { childSessionOnPath, hasProjectPermissions } from "./helpers"
 
 export const ProjectIcon = (props: {
   project: LocalProject
@@ -41,18 +39,10 @@ export const ProjectIcon = (props: {
     }),
   )
   const notify = createMemo(() => props.notify && (hasPermissions() || unseenCount() > 0))
-  const name = createMemo(() => props.project.name || getFilename(props.project.worktree))
-
   return (
-    <div class={`relative size-8 shrink-0 rounded ${props.class ?? ""}`}>
-      <div class="size-full rounded overflow-clip">
-        <Avatar
-          fallback={name()}
-          src={getProjectAvatarSource(props.project.id, props.project.icon)}
-          {...getAvatarColors(props.project.icon?.color)}
-          class="size-full rounded"
-          classList={{ "badge-mask": notify() }}
-        />
+    <div class={`relative size-8 shrink-0 ${props.class ?? ""}`}>
+      <div class="flex size-full items-center justify-center rounded-md text-icon-base">
+        <IconV2 name="folder" size="small" />
       </div>
       <Show when={notify()}>
         <div
@@ -85,6 +75,8 @@ export type SessionItemProps = {
   level?: number
   sidebarExpanded: Accessor<boolean>
   clearHoverProjectSoon: () => void
+  sessionHref: (session: Session) => string
+  navigateToSession: (session: Session) => void
   prefetchSession: (session: Session, priority?: "high" | "low") => void
   archiveSession: (session: Session) => Promise<void>
 }
@@ -100,6 +92,8 @@ const SessionRow = (props: {
   hasError: Accessor<boolean>
   unseenCount: Accessor<number>
   clearHoverProjectSoon: () => void
+  href: string
+  navigateToSession: (session: Session) => void
   sidebarOpened: Accessor<boolean>
   warmPress: () => void
   warmFocus: () => void
@@ -108,11 +102,13 @@ const SessionRow = (props: {
 
   return (
     <A
-      href={`/${props.slug}/session/${props.session.id}`}
+      href={props.href}
       class={`flex items-center gap-2 min-w-0 w-full text-left focus:outline-none ${props.dense ? "py-0.5" : "py-1"}`}
       onPointerDown={props.warmPress}
       onFocus={props.warmFocus}
-      onClick={() => {
+      onClick={(event) => {
+        event.preventDefault()
+        props.navigateToSession(props.session)
         if (props.sidebarOpened()) return
         props.clearHoverProjectSoon()
       }}
@@ -209,6 +205,8 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
       hasError={hasError}
       unseenCount={unseenCount}
       clearHoverProjectSoon={props.clearHoverProjectSoon}
+      href={props.sessionHref(props.session)}
+      navigateToSession={props.navigateToSession}
       sidebarOpened={layout.sidebar.opened}
       warmPress={() => warm(2, "high")}
       warmFocus={() => warm(2, "high")}
@@ -285,17 +283,18 @@ export const NewSessionItem = (props: {
   dense?: boolean
   sidebarExpanded: Accessor<boolean>
   clearHoverProjectSoon: () => void
+  navigateToNewSession: () => void
 }): JSX.Element => {
   const layout = useLayout()
   const language = useLanguage()
   const label = language.t("command.session.new")
   const tooltip = () => props.mobile || !props.sidebarExpanded()
   const item = (
-    <A
-      href={`/${props.slug}/session`}
-      end
+    <button
+      type="button"
       class={`flex items-center gap-2 min-w-0 w-full text-left focus:outline-none ${props.dense ? "py-0.5" : "py-1"}`}
       onClick={() => {
+        props.navigateToNewSession()
         if (layout.sidebar.opened()) return
         props.clearHoverProjectSoon()
       }}
@@ -304,7 +303,7 @@ export const NewSessionItem = (props: {
         <IconV2 name="edit" size="small" class="text-icon-weak" />
       </div>
       <span class="text-14-regular text-text-strong min-w-0 flex-1 truncate">{label}</span>
-    </A>
+    </button>
   )
 
   return (

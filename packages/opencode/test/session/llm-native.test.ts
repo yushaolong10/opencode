@@ -154,6 +154,15 @@ const expectOpenAIResponsesRequest = (input: {
   })
 
 describe("session.llm-native.request", () => {
+  test("explicit model capabilities use the AI SDK path instead of being silently ignored", () => {
+    expect(
+      LLMNativeRuntime.status({
+        model: { ...baseModel, options: { supportsSystemMessage: "developer" } },
+        provider: providerInfo,
+        auth: undefined,
+      }),
+    ).toEqual({ type: "unsupported", reason: "custom model capabilities require the AI SDK adapter" })
+  })
   test("maps normalized stream inputs to a native LLM request", () => {
     const messages: ModelMessage[] = [
       {

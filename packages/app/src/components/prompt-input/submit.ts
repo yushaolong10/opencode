@@ -419,7 +419,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         session = created
         await startTransition(() => {
           if (!session) return
-          if (shouldAutoAccept) permissionState.enableAutoAccept(session.id, sessionDirectory)
+           if (shouldAutoAccept) permissionState.enableAutoAccept()
           local.session.promote(sessionDirectory, session.id, {
             agent: currentAgent.name,
             model: { providerID: currentModel.provider.id, modelID: currentModel.id },

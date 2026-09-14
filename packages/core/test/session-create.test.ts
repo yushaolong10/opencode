@@ -164,6 +164,18 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("persists V2 title updates through the session event projection", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const store = yield* SessionStore.Service
+      const created = yield* session.create({ location })
+
+      yield* store.setTitle({ sessionID: created.id, title: "Updated title" })
+
+      expect(yield* store.get(created.id)).toMatchObject({ id: created.id, title: "Updated title" })
+    }),
+  )
+
   it.effect("persists creation through the existing legacy created event", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

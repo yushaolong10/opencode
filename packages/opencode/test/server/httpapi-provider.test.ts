@@ -22,6 +22,77 @@ const providerID = "test-oauth-parity"
 const oauthURL = "https://example.com/oauth"
 const oauthInstructions = "Finish OAuth"
 
+it.instance(
+  "saving custom capabilities refreshes already-loaded models before returning",
+  Effect.gen(function* () {
+    const directory = (yield* TestInstance).directory
+    const id = "test-custom-capability-refresh"
+    const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+    yield* Effect.addFinalizer(() =>
+      request(`/global/config/provider/${id}`, { method: "DELETE" }).pipe(Effect.asVoid, Effect.orDie),
+    )
+    for (const effort of ["high", "xhigh"]) {
+      const saved = yield* request(`/global/config/provider/${id}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          npm: "@ai-sdk/openai-compatible",
+          options: { baseURL: "https://example.invalid/v1" },
+          models: {
+            "gpt-6": {
+              contextWindow: 200000,
+              maxOutputTokens: 64000,
+              supportsSystemMessage: "developer",
+              provider: { npm: "@ai-sdk/github-copilot", endpoint: "responses" },
+              reasoningCapabilities: {
+                supportsReasoning: true,
+                canTurnOffReasoning: false,
+                canIOReasoning: true,
+                reasoningSlider: { type: "effort_slider", values: ["high", "xhigh"], default: effort },
+              },
+            },
+          },
+        }),
+      })
+      expect(saved.status).toBe(200)
+      const listed = yield* request("/provider", { headers })
+      expect(listed.status).toBe(200)
+      const provider = providerByID(yield* listed.json, "all", id)
+      expect(provider).toMatchObject({
+        models: { "gpt-6": { limit: { output: 64000 }, options: { reasoningEffort: effort } } },
+      })
+    }
+    const patched = yield* request(`/global/config/provider/${id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ models: { "org/other": { contextWindow: 128000, name: "Other" } } }),
+    })
+    expect(patched.status).toBe(200)
+    expect(yield* patched.json).toMatchObject({
+      provider: {
+        [id]: {
+          models: {
+            "gpt-6": { maxOutputTokens: 64000 },
+            "org/other": { name: "Other" },
+          },
+        },
+      },
+    })
+    const removed = yield* request(`/global/config/provider/${id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ remove: ["org/other"], settings: { name: "Renamed" } }),
+    })
+    expect(removed.status).toBe(200)
+    const body = yield* removed.json
+    expect(body).toMatchObject({
+      provider: { [id]: { name: "Renamed", models: { "gpt-6": { maxOutputTokens: 64000 } } } },
+    })
+    expect(JSON.stringify(body)).not.toContain("org/other")
+  }),
+  { config: { formatter: false, lsp: false } },
+)
+
 function providerListHasFetch(list: unknown) {
   if (!Array.isArray(list)) return false
   return list.some((item: unknown) => {

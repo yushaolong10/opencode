@@ -56,7 +56,53 @@ describe("current session timeline rows", () => {
       "turn-gap:msg_3",
       "user-message:msg_3",
       "assistant-part:msg_3:msg_4:reasoning:0",
+      "thinking:msg_3",
     ])
+  })
+
+  test.each([true, false])("keeps the turn clock across turns and retries (%s)", (showReasoning) => {
+    const source = [
+      { id: "msg_user", type: "user", text: "work", time: { created: 1_000 } },
+      {
+        id: "msg_thinking",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        content: [{ type: "reasoning", text: "Planning" }],
+        time: { created: 2_000, completed: 5_000 },
+      },
+      {
+        id: "msg_answer",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        content: [{ type: "text", text: "Answer" }],
+        time: { created: 10_000, completed: 15_000 },
+      },
+      { id: "msg_next", type: "user", text: "next", time: { created: 20_000 } },
+    ] satisfies SessionMessageInfo[]
+
+    for (const length of [1, 2, 3, 4]) {
+      const page = source.slice(0, length)
+      const normalized = normalizeSessionMessages("ses_1", page)
+      const messages = new Map(normalized.messages.map((message) => [message.id, message]))
+      for (const status of ["busy", "retry", "idle"] as const) {
+        const result = Timeline.constructSessionMessageRows(
+          page,
+          (id) => messages.get(id),
+          (id) => normalized.parts.get(id) ?? [],
+          showReasoning,
+          status,
+          true,
+          normalized.messages.filter((message) => message.role === "user"),
+        )
+        const thinking = result.rows.filter((row) => row._tag === "Thinking")
+        expect(thinking).toHaveLength(status === "idle" ? 0 : 1)
+        if (status === "idle") continue
+        expect(thinking[0]?.startedAt).toBe(length === 4 ? 20_000 : 1_000)
+        expect(thinking[0]?.userMessageID).toBe(length === 4 ? "msg_next" : "msg_user")
+      }
+    }
   })
 
   test("renders a current shell message as a standalone turn", () => {
@@ -202,6 +248,6 @@ describe("current session timeline rows", () => {
       normalized.messages.filter((message) => message.role === "user"),
     )
 
-    expect(result.rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart"])
+    expect(result.rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart", "Thinking"])
   })
 })

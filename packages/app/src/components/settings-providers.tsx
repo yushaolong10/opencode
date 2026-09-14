@@ -9,7 +9,7 @@ import { useLanguage } from "@/context/language"
 import { useServerProtocol, useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { DialogConnectProvider, useProviderConnectController } from "./dialog-connect-provider"
-import { DialogCustomProvider } from "./dialog-custom-provider"
+import { DialogCustomProvider, DialogDeleteCustomProvider } from "./dialog-custom-provider"
 import { SettingsList } from "./settings-list"
 import { SettingsServerPicker, SettingsServerScope } from "./settings-server-picker"
 
@@ -49,10 +49,25 @@ const SettingsProvidersContent: Component<{ onBack?: () => void }> = (props) => 
     void dialog.show(() => <DialogConnectProvider controller={providerConnect} />)
   }
 
+  const editCustom = (providerID: string) => {
+    void dialog.show(() => <DialogCustomProvider providerID={providerID} onBack={() => dialog.close()} />)
+  }
+
+  const deleteCustom = (providerID: string, name: string) => {
+    void dialog.show(() => <DialogDeleteCustomProvider providerID={providerID} name={name} />)
+  }
+
   const connected = createMemo(() => {
     return providers
       .connected()
       .filter((p) => p.id !== "opencode" || Object.values(p.models).find((m) => m.cost?.input))
+  })
+
+  const savedCustom = createMemo(() => {
+    const disabled = new Set(serverSync().data.config.disabled_providers ?? [])
+    return Object.entries(serverSync().data.config.provider ?? [])
+      .filter(([id, provider]) => disabled.has(id) && provider.models)
+      .map(([id, provider]) => ({ id, name: provider.name ?? id }))
   })
 
   const popular = createMemo(() => {
@@ -92,8 +107,8 @@ const SettingsProvidersContent: Component<{ onBack?: () => void }> = (props) => 
   const isConfigCustom = (providerID: string) => {
     const provider = serverSync().data.config.provider?.[providerID]
     if (!provider) return false
-    if (provider.npm !== "@ai-sdk/openai-compatible") return false
-    if (!provider.models || Object.keys(provider.models).length === 0) return false
+    if (provider.npm !== "@ai-sdk/openai-compatible" && provider.npm !== "@ai-sdk/github-copilot") return false
+    if (!provider.models) return false
     return true
   }
 
@@ -120,11 +135,32 @@ const SettingsProvidersContent: Component<{ onBack?: () => void }> = (props) => 
       })
   }
 
+  const enableProvider = async (providerID: string, name: string) => {
+    if (protocol() !== "v1") return
+    const provider = serverSync().data.config.provider?.[providerID]
+    if (!provider) return
+
+    await serverSDK()
+      .client.global.config.provider.set(
+        { providerID, providerConfig: provider },
+        { throwOnError: true },
+      )
+      .then(() => {
+        showToast({
+          variant: "success",
+          icon: "circle-check",
+          title: language.t("provider.connect.toast.connected.title", { provider: name }),
+          description: language.t("provider.connect.toast.connected.description", { provider: name }),
+        })
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        showToast({ title: language.t("common.requestFailed"), description: message })
+      })
+  }
+
   const disconnect = async (providerID: string, name: string) => {
     if (isConfigCustom(providerID)) {
-      await serverSDK()
-        .client.auth.remove({ providerID })
-        .catch(() => undefined)
       await disableProvider(providerID, name)
       return
     }
@@ -175,16 +211,33 @@ const SettingsProvidersContent: Component<{ onBack?: () => void }> = (props) => 
                       <Tag>{type(item)}</Tag>
                     </div>
                     <Show
-                      when={canDisconnect(item)}
+                      when={isConfigCustom(item.id)}
                       fallback={
-                        <span class="text-14-regular text-text-base opacity-0 group-hover:opacity-100 transition-opacity duration-200 pr-3 cursor-default">
-                          {language.t("settings.providers.connected.environmentDescription")}
-                        </span>
+                        <Show
+                          when={canDisconnect(item)}
+                          fallback={
+                            <span class="text-14-regular text-text-base opacity-0 group-hover:opacity-100 transition-opacity duration-200 pr-3 cursor-default">
+                              {language.t("settings.providers.connected.environmentDescription")}
+                            </span>
+                          }
+                        >
+                          <Button size="large" variant="ghost" onClick={() => void disconnect(item.id, item.name)}>
+                            {language.t("common.disconnect")}
+                          </Button>
+                        </Show>
                       }
                     >
-                      <Button size="large" variant="ghost" onClick={() => void disconnect(item.id, item.name)}>
-                        {language.t("common.disconnect")}
-                      </Button>
+                      <div class="flex items-center gap-1">
+                        <Button size="large" variant="ghost" onClick={() => editCustom(item.id)}>
+                          {language.t("common.edit")}
+                        </Button>
+                        <Button size="large" variant="ghost" onClick={() => void disconnect(item.id, item.name)}>
+                          {language.t("common.disconnect")}
+                        </Button>
+                        <Button size="large" variant="ghost" onClick={() => deleteCustom(item.id, item.name)}>
+                          {language.t("common.delete")}
+                        </Button>
+                      </div>
                     </Show>
                   </div>
                 )}
@@ -192,6 +245,36 @@ const SettingsProvidersContent: Component<{ onBack?: () => void }> = (props) => 
             </Show>
           </SettingsList>
         </div>
+
+        <Show when={savedCustom().length > 0}>
+          <div class="flex flex-col gap-1">
+            <h3 class="text-14-medium text-text-strong pb-2">{language.t("provider.custom.saved")}</h3>
+            <SettingsList>
+              <For each={savedCustom()}>
+                {(item) => (
+                  <div class="flex flex-wrap items-center justify-between gap-4 min-h-16 py-3 border-b border-border-weak-base last:border-none">
+                    <div class="flex items-center gap-3 min-w-0">
+                      <ProviderIcon id="synthetic" class="size-5 shrink-0 icon-strong-base" />
+                      <span class="text-14-medium text-text-strong truncate">{item.name}</span>
+                      <Tag>{language.t("settings.providers.tag.custom")}</Tag>
+                    </div>
+                    <div class="flex items-center gap-1">
+                      <Button size="large" variant="secondary" onClick={() => void enableProvider(item.id, item.name)}>
+                        {language.t("common.connect")}
+                      </Button>
+                      <Button size="large" variant="ghost" onClick={() => editCustom(item.id)}>
+                        {language.t("common.edit")}
+                      </Button>
+                      <Button size="large" variant="ghost" onClick={() => deleteCustom(item.id, item.name)}>
+                        {language.t("common.delete")}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </For>
+            </SettingsList>
+          </div>
+        </Show>
 
         <div class="flex flex-col gap-1">
           <h3 class="text-14-medium text-text-strong pb-2">{language.t("settings.providers.section.popular")}</h3>
@@ -241,7 +324,7 @@ const SettingsProvidersContent: Component<{ onBack?: () => void }> = (props) => 
                   variant="secondary"
                   icon="plus-small"
                   onClick={() => {
-                    dialog.show(() => <DialogCustomProvider onBack={dialog.close} />)
+                    void dialog.show(() => <DialogCustomProvider onBack={() => dialog.close()} />)
                   }}
                 >
                   {language.t("common.connect")}

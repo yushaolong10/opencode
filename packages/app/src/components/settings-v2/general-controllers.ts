@@ -22,29 +22,17 @@ import { createSoundPreviewController, type ShellOption } from "./general-contro
 export { createShellOptions, createSoundPreviewController } from "./general-controller-behavior"
 export type { ShellOption, ShellSelectOption } from "./general-controller-behavior"
 
-export function createPermissionScopeController(sessionID: Accessor<string | undefined>) {
+export function createPermissionScopeController(
+  _sessionID: Accessor<string | undefined>,
+  _directory?: Accessor<string | undefined>,
+) {
   const permission = usePermission()
-  const serverSync = useServerSync()
-  const directory = createMemo(() => {
-    const id = sessionID()
-    if (!id) return undefined
-    return serverSync().session.lineage.peek(id)?.session.directory
-  })
-
   return {
-    accepting: createMemo(() => {
-      const id = sessionID()
-      const dir = directory()
-      if (!id || !dir) return false
-      return permission.isAutoAccepting(id, dir)
-    }),
-    enabled: createMemo(() => !!directory()),
+    accepting: createMemo(() => permission.isAutoAccepting()),
+    enabled: createMemo(() => true),
     set: (checked: boolean) => {
-      const id = sessionID()
-      const dir = directory()
-      if (!id || !dir) return
-      if (checked) return permission.enableAutoAccept(id, dir)
-      permission.disableAutoAccept(id, dir)
+      if (checked) permission.enableAutoAccept()
+      else permission.disableAutoAccept()
     },
   }
 }

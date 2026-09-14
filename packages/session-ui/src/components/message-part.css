@@ -235,14 +235,13 @@
     align-items: center;
     justify-content: flex-start;
     gap: 10px;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s ease;
-    will-change: opacity;
 
     [data-component="tooltip-trigger"] {
       display: inline-flex;
       width: fit-content;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
     }
   }
 
@@ -256,8 +255,8 @@
     gap: 12px;
   }
 
-  &:hover [data-slot="text-part-copy-wrapper"],
-  &:focus-within [data-slot="text-part-copy-wrapper"] {
+  &:hover [data-slot="text-part-copy-wrapper"] [data-component="tooltip-trigger"],
+  &:focus-within [data-slot="text-part-copy-wrapper"] [data-component="tooltip-trigger"] {
     opacity: 1;
     pointer-events: auto;
   }

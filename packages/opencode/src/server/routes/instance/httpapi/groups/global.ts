@@ -1,4 +1,6 @@
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { ConfigProviderV1 } from "@opencode-ai/core/v1/config/provider"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventManifest } from "@/event-manifest"
 import { InstanceDisposed } from "@/server/event"
@@ -69,6 +71,7 @@ export const GlobalPaths = {
   health: "/global/health",
   event: "/global/event",
   config: "/global/config",
+  configProvider: "/global/config/provider/:providerID",
   dispose: "/global/dispose",
   upgrade: "/global/upgrade",
 } as const
@@ -112,6 +115,42 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.config.update",
           summary: "Update global configuration",
           description: "Update global OpenCode configuration settings and preferences.",
+        }),
+      ),
+      HttpApiEndpoint.delete("configProviderRemove", GlobalPaths.configProvider, {
+        params: { providerID: ProviderV2.ID },
+        success: described(ConfigV1.Info, "Global config after removing the provider"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.config.provider.remove",
+          summary: "Remove global provider configuration",
+          description: "Remove a custom provider and its references from the global configuration.",
+        }),
+      ),
+      HttpApiEndpoint.put("configProviderSet", GlobalPaths.configProvider, {
+        params: { providerID: ProviderV2.ID },
+        payload: ConfigProviderV1.Info,
+        success: described(ConfigV1.Info, "Global config after replacing the provider"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.config.provider.set",
+          summary: "Set global provider configuration",
+          description: "Create or fully replace a custom provider in the global configuration.",
+        }),
+      ),
+      HttpApiEndpoint.patch("configProviderPatch", GlobalPaths.configProvider, {
+        params: { providerID: ProviderV2.ID },
+        payload: ConfigProviderV1.Update,
+        success: described(ConfigV1.Info, "Global config after updating the provider"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.config.provider.patch",
+          summary: "Update selected provider settings and models",
+          description:
+            "Replace only supplied model entries and delete IDs listed in remove. Other models are preserved.",
         }),
       ),
       HttpApiEndpoint.post("dispose", GlobalPaths.dispose, {

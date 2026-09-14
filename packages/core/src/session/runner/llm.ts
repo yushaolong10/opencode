@@ -8,7 +8,7 @@ import {
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@opencode-ai/llm"
-import { Cause, DateTime, Effect, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
+import { Cause, DateTime, Effect, FiberSet, Layer, Option, Scope, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -39,6 +39,7 @@ import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
+import { SessionMessage } from "../message"
 
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -105,6 +106,7 @@ const layer = Layer.effect(
     const referenceGuidance = yield* ReferenceGuidance.Service
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
+    const scope = yield* Scope.Scope
     const db = (yield* Database.Service).db
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
@@ -115,6 +117,57 @@ const layer = Layer.effect(
 
     const getContext = Effect.fn("SessionRunner.getContext")(function* (sessionID: SessionSchema.ID) {
       return yield* store.context(sessionID)
+    })
+    const generateTitle = Effect.fn("SessionRunner.generateTitle")(function* (input: {
+      session: SessionSchema.Info
+      context: SessionMessage.Message[]
+    }) {
+      if (input.session.parentID) return
+      if (!/^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(input.session.title)) return
+
+      const userMessages = input.context.filter((message) => message.type === "user")
+      const firstUser = userMessages[0]
+      if (!firstUser || userMessages.length !== 1) return
+
+      const agent = yield* agents.get(AgentV2.ID.make("title"))
+      if (!agent) return
+      const model = yield* models.resolve({ ...input.session, model: agent.model ?? input.session.model })
+      const firstUserIndex = input.context.indexOf(firstUser)
+      const text = yield* llm
+        .stream(
+          LLM.request({
+            model,
+            http: {
+              headers: {
+                "x-session-affinity": input.session.id,
+                "X-Session-Id": input.session.id,
+                ...(input.session.parentID ? { "x-parent-session-id": input.session.parentID } : {}),
+              },
+            },
+            system: agent.system ? [SystemPart.make(agent.system)] : [],
+            messages: [
+              Message.make({ role: "user", content: "Generate a title for this conversation:\n" }),
+              ...toLLMMessages(input.context.slice(0, firstUserIndex + 1), model),
+            ],
+            tools: [],
+            toolChoice: "none",
+          }),
+        )
+        .pipe(
+          Stream.filter(LLMEvent.is.textDelta),
+          Stream.map((event) => event.text),
+          Stream.mkString,
+        )
+      const title = text
+        .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.length > 0)
+      if (!title) return
+      yield* store.setTitle({
+        sessionID: input.session.id,
+        title: title.length > 100 ? title.substring(0, 97) + "..." : title,
+      })
     })
     const failInterruptedTools = Effect.fn("SessionRunner.failInterruptedTools")(function* (
       sessionID: SessionSchema.ID,
@@ -199,6 +252,10 @@ const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      if (currentStep === 1)
+        yield* generateTitle({ session, context })
+          .pipe(Effect.catchCause((cause) => Effect.logError("failed to generate session title", cause)))
+          .pipe(Effect.forkIn(scope))
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id

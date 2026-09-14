@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from "@solidjs/router"
+import { useParams } from "@solidjs/router"
 import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createSortable } from "@thisbeyond/solid-dnd"
@@ -40,6 +40,9 @@ export type WorkspaceSidebarContext = {
   sidebarExpanded: Accessor<boolean>
   sidebarHovering: Accessor<boolean>
   clearHoverProjectSoon: () => void
+  navigateToNewSession: (directory: string) => void
+  sessionHref: (session: Session) => string
+  navigateToSession: (session: Session) => void
   prefetchSession: (session: Session, priority?: "high" | "low") => void
   archiveSession: (session: Session) => Promise<void>
   workspaceName: (directory: string, projectId?: string, branch?: string) => string | undefined
@@ -237,6 +240,7 @@ const WorkspaceActions = (props: {
 )
 
 const WorkspaceSessionList = (props: {
+  directory: Accessor<string>
   slug: Accessor<string>
   mobile?: boolean
   ctx: WorkspaceSidebarContext
@@ -254,6 +258,7 @@ const WorkspaceSessionList = (props: {
         mobile={props.mobile}
         sidebarExpanded={props.ctx.sidebarExpanded}
         clearHoverProjectSoon={props.ctx.clearHoverProjectSoon}
+        navigateToNewSession={() => props.ctx.navigateToNewSession(props.directory())}
       />
     </Show>
     <Show when={props.loading()}>
@@ -270,6 +275,8 @@ const WorkspaceSessionList = (props: {
           showChild
           sidebarExpanded={props.ctx.sidebarExpanded}
           clearHoverProjectSoon={props.ctx.clearHoverProjectSoon}
+          sessionHref={props.ctx.sessionHref}
+          navigateToSession={props.ctx.navigateToSession}
           prefetchSession={props.ctx.prefetchSession}
           archiveSession={props.ctx.archiveSession}
         />
@@ -300,7 +307,6 @@ export const SortableWorkspace = (props: {
   sortNow: Accessor<number>
   mobile?: boolean
 }): JSX.Element => {
-  const navigate = useNavigate()
   const params = useParams()
   const serverSync = useServerSync()
   const queryOptions = useQueryOptions()
@@ -419,7 +425,7 @@ export const SortableWorkspace = (props: {
                 showDeleteWorkspaceDialog={props.ctx.showDeleteWorkspaceDialog}
                 root={props.project.worktree}
                 clearHoverProjectSoon={props.ctx.clearHoverProjectSoon}
-                navigateToNewSession={() => navigate(`/${slug()}/session`)}
+                navigateToNewSession={() => props.ctx.navigateToNewSession(props.directory)}
               />
             </div>
           </div>
@@ -427,6 +433,7 @@ export const SortableWorkspace = (props: {
 
         <Collapsible.Content>
           <WorkspaceSessionList
+            directory={() => props.directory}
             slug={slug}
             mobile={props.mobile}
             ctx={props.ctx}
@@ -448,6 +455,7 @@ export const LocalWorkspace = (props: {
   project: LocalProject
   sortNow: Accessor<number>
   mobile?: boolean
+  inline?: boolean
 }): JSX.Element => {
   const serverSync = useServerSync()
   const queryOptions = useQueryOptions()
@@ -469,10 +477,15 @@ export const LocalWorkspace = (props: {
 
   return (
     <div
+      data-component="sidebar-project-panel"
       ref={(el) => props.ctx.setScrollContainerRef(el, props.mobile)}
-      class="size-full flex flex-col py-2 overflow-y-auto no-scrollbar [overflow-anchor:none]"
+      classList={{
+        "flex w-full flex-col py-1 [overflow-anchor:none]": true,
+        "size-full py-2 overflow-y-auto no-scrollbar": !props.inline,
+      }}
     >
       <WorkspaceSessionList
+        directory={() => props.project.worktree}
         slug={slug}
         mobile={props.mobile}
         ctx={props.ctx}

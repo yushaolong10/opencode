@@ -12,7 +12,7 @@ import {
   type Accessor,
 } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
-import { useNavigate, useParams } from "@solidjs/router"
+import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { useLayout, LocalProject } from "@/context/layout"
 import { useServerSync } from "@/context/server-sync"
 import { Persist, persisted } from "@/utils/persist"
@@ -58,8 +58,10 @@ import { TabsInfoPopup } from "@/components/help-button"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
+import { tabKey, useTabs } from "@/context/tabs"
 import { useLanguage, type Locale } from "@/context/language"
 import { pathKey } from "@/utils/path-key"
+import { sessionHref } from "@/utils/session-route"
 import {
   displayName,
   effectiveWorkspaceOrder,
@@ -95,6 +97,7 @@ export default function LegacyLayout(props: ParentProps) {
       workspaceName: {} as Record<string, string>,
       workspaceBranchName: {} as Record<string, Record<string, string>>,
       workspaceExpanded: {} as Record<string, boolean>,
+      projectExpanded: {} as Record<string, boolean>,
       gettingStartedDismissed: false,
     }),
   )
@@ -106,6 +109,7 @@ export default function LegacyLayout(props: ParentProps) {
   let dialogDead = false
 
   const params = useParams()
+  const [search] = useSearchParams<{ draftId?: string }>()
   const serverSync = useServerSync()
   const layout = useLayout()
   const layoutReady = createMemo(() => layout.ready())
@@ -119,9 +123,10 @@ export default function LegacyLayout(props: ParentProps) {
   const providers = useProviders(() => undefined)
   const dialog = useDialog()
   const command = useCommand()
+  const tabs = useTabs()
   const theme = useTheme()
   const language = useLanguage()
-  createEffect(() => setV2Toast(false))
+  createEffect(() => setV2Toast(settings.general.newLayoutDesigns()))
   const initialDirectory = decode64(params.dir)
   const route = createMemo(() => {
     const slug = params.dir
@@ -143,7 +148,22 @@ export default function LegacyLayout(props: ParentProps) {
     dark: "theme.scheme.dark",
   }
   const colorSchemeLabel = (scheme: ColorScheme) => language.t(colorSchemeKey[scheme])
-  const currentDir = createMemo(() => route().dir)
+  const currentDir = createMemo(() => {
+    const directory = route().dir
+    if (directory) return directory
+    if (!settings.general.newLayoutDesigns()) return ""
+    if (params.id) {
+      const routeServer = decode64(params.serverKey)
+      const tab = tabs.store.find(
+        (tab) => tab.type === "session" && tab.sessionId === params.id && (!routeServer || tab.server === routeServer),
+      )
+      const remembered = tab?.type === "session" ? tabs.info[tabKey(tab)]?.directory : undefined
+      return remembered ?? serverSync().session.lineage.peek(params.id)?.session.directory ?? ""
+    }
+    if (!search.draftId) return ""
+    const draft = tabs.store.find((tab) => tab.type === "draft" && tab.draftID === search.draftId)
+    return draft?.type === "draft" ? draft.directory : ""
+  })
 
   const [state, setState] = createStore({
     autoselect: !initialDirectory,
@@ -327,6 +347,29 @@ export default function LegacyLayout(props: ParentProps) {
     navigate(href)
     layout.mobileSidebar.hide()
   }
+
+  const navigateToNewSessionRoute = (directory: string) => {
+    if (!settings.general.newLayoutDesigns()) {
+      navigateWithSidebarReset(`/${base64Encode(directory)}/session`)
+      return
+    }
+    clearSidebarHoverState()
+    layout.mobileSidebar.hide()
+    void tabs.newDraft({ server: server.key, directory })
+  }
+
+  const navigateToSessionRoute = (session: Session) => {
+    if (!settings.general.newLayoutDesigns()) {
+      navigateWithSidebarReset(`/${base64Encode(session.directory)}/session/${session.id}`)
+      return
+    }
+    navigateWithSidebarReset(sessionHref(server.key, session.id))
+  }
+
+  const sessionRouteHref = (session: Session) =>
+    settings.general.newLayoutDesigns()
+      ? sessionHref(server.key, session.id)
+      : `/${base64Encode(session.directory)}/session/${session.id}`
 
   function cycleTheme(direction = 1) {
     const ids = availableThemeEntries().map(([id]) => id)
@@ -1187,9 +1230,10 @@ export default function LegacyLayout(props: ParentProps) {
     const openSession = async (target: { directory: string; id: string }) => {
       if (!canOpen(target.directory)) return false
       const sync = serverSync().ensureDirSyncContext(target.directory)
-      if (sync.session.get(target.id)) {
+      const session = sync.session.get(target.id)
+      if (session) {
         setStore("lastProjectSession", root, { directory: target.directory, id: target.id, at: Date.now() })
-        navigateWithSidebarReset(`/${base64Encode(target.directory)}/session/${target.id}`)
+        navigateToSessionRoute(session)
         return true
       }
       const resolved = await sync.session
@@ -1199,7 +1243,7 @@ export default function LegacyLayout(props: ParentProps) {
       if (!resolved?.directory) return false
       if (!canOpen(resolved.directory)) return false
       setStore("lastProjectSession", root, { directory: resolved.directory, id: resolved.id, at: Date.now() })
-      navigateWithSidebarReset(`/${base64Encode(resolved.directory)}/session/${resolved.id}`)
+      navigateToSessionRoute(resolved)
       return true
     }
 
@@ -1236,12 +1280,12 @@ export default function LegacyLayout(props: ParentProps) {
       return
     }
 
-    navigateWithSidebarReset(`/${base64Encode(root)}/session`)
+    navigateToNewSessionRoute(root)
   }
 
   function navigateToSession(session: Session | undefined) {
     if (!session) return
-    navigateWithSidebarReset(`/${base64Encode(session.directory)}/session/${session.id}`)
+    navigateToSessionRoute(session)
   }
 
   function openProject(directory: string, navigate = true) {
@@ -1329,7 +1373,7 @@ export default function LegacyLayout(props: ParentProps) {
 
     const next = list[index + 1] ?? list[index - 1]
 
-    navigateWithSidebarReset(`/${base64Encode(next.worktree)}/session`)
+    if (!settings.general.newLayoutDesigns()) navigateWithSidebarReset(`/${base64Encode(next.worktree)}/session`)
     layout.projects.close(directory)
     queueMicrotask(() => {
       void navigateToProject(next.worktree)
@@ -1382,9 +1426,9 @@ export default function LegacyLayout(props: ParentProps) {
     const current = currentDir()
     const currentKey = pathKey(current)
     const deletedKey = pathKey(directory)
-    const shouldLeave = leaveDeletedWorkspace || (!!params.dir && currentKey === deletedKey)
+    const shouldLeave = leaveDeletedWorkspace || (!!current && currentKey === deletedKey)
     if (!leaveDeletedWorkspace && shouldLeave) {
-      navigateWithSidebarReset(`/${base64Encode(root)}/session`)
+      navigateToNewSessionRoute(root)
     }
 
     setBusy(directory, true)
@@ -1431,8 +1475,8 @@ export default function LegacyLayout(props: ParentProps) {
       : [root]
     const valid = dirs.some((item) => pathKey(item) === nextKey)
 
-    if (params.dir && projectRoot(nextCurrent) === root && !valid) {
-      navigateWithSidebarReset(`/${base64Encode(root)}/session`)
+    if (nextCurrent && projectRoot(nextCurrent) === root && !valid) {
+      navigateToNewSessionRoute(root)
     }
   }
 
@@ -1535,9 +1579,9 @@ export default function LegacyLayout(props: ParentProps) {
     })
 
     const handleDelete = () => {
-      const leaveDeletedWorkspace = !!params.dir && pathKey(currentDir()) === pathKey(props.directory)
+      const leaveDeletedWorkspace = !!currentDir() && pathKey(currentDir()) === pathKey(props.directory)
       if (leaveDeletedWorkspace) {
-        navigateWithSidebarReset(`/${base64Encode(props.root)}/session`)
+        navigateToNewSessionRoute(props.root)
       }
       dialog.close()
       void deleteWorkspace(props.root, props.directory, leaveDeletedWorkspace)
@@ -1708,6 +1752,7 @@ export default function LegacyLayout(props: ParentProps) {
   })
 
   const side = createMemo(() => Math.max(layout.sidebar.width(), 244))
+  const sidebarWidth = createMemo(() => (layout.sidebar.opened() ? side() : 64))
   const panel = createMemo(() => Math.max(side() - 64, 0))
 
   const loadedSessionDirs = new Set<string>()
@@ -1856,7 +1901,7 @@ export default function LegacyLayout(props: ParentProps) {
     })
 
     serverSync().child(created.directory)
-    navigateWithSidebarReset(`/${base64Encode(created.directory)}/session`)
+    navigateToNewSessionRoute(created.directory)
   }
 
   const workspaceSidebarCtx: WorkspaceSidebarContext = {
@@ -1865,6 +1910,9 @@ export default function LegacyLayout(props: ParentProps) {
     sidebarExpanded,
     sidebarHovering,
     clearHoverProjectSoon,
+    navigateToNewSession: navigateToNewSessionRoute,
+    sessionHref: sessionRouteHref,
+    navigateToSession: navigateToSessionRoute,
     prefetchSession,
     archiveSession,
     workspaceName,
@@ -1900,7 +1948,10 @@ export default function LegacyLayout(props: ParentProps) {
       setState("hoverProject", hoverOpen ? worktree : undefined)
     },
     navigateToProject,
+    navigateToNewSession: navigateToNewSessionRoute,
     openSidebar: () => layout.sidebar.open(),
+    projectExpanded: (directory, initial) => store.projectExpanded[directory] ?? initial,
+    setProjectExpanded: (directory, value) => setStore("projectExpanded", directory, value),
     closeProject,
     showEditProjectDialog: (proj) => showEditProjectDialog(server.current!, proj),
     toggleProjectWorkspaces,
@@ -1911,6 +1962,8 @@ export default function LegacyLayout(props: ParentProps) {
       navList: currentSessions,
       sidebarExpanded,
       clearHoverProjectSoon,
+      sessionHref: sessionRouteHref,
+      navigateToSession: navigateToSessionRoute,
       prefetchSession,
       archiveSession,
     },
@@ -1920,6 +1973,7 @@ export default function LegacyLayout(props: ParentProps) {
     project: Accessor<LocalProject | undefined>
     mobile?: boolean
     merged?: boolean
+    inline?: boolean
   }) => {
     const project = panelProps.project
     const merged = createMemo(() => panelProps.mobile || (panelProps.merged ?? layout.sidebar.opened()))
@@ -1965,16 +2019,19 @@ export default function LegacyLayout(props: ParentProps) {
     return (
       <div
         classList={{
-          "flex flex-col min-h-0 min-w-0 box-border rounded-tl-[12px] px-3": true,
+          "flex flex-col min-h-0 min-w-0 box-border": true,
+          "px-3": !panelProps.inline,
+          "ms-4 border-s border-border-weaker-base ps-2 pb-2": !!panelProps.inline,
+          "rounded-tl-[12px]": !merged(),
           "border border-b-0 border-border-weak-base": !merged(),
-          "border-l border-t border-border-weaker-base": merged(),
-          "bg-background-base": merged() || hover(),
+          "bg-transparent": merged(),
+          "bg-background-base": hover(),
           "bg-background-stronger": !merged() && !hover(),
-          "flex-1 min-w-0": panelProps.mobile,
+          "flex-1 min-w-0": panelProps.mobile && !panelProps.inline,
           "max-w-full overflow-hidden": panelProps.mobile,
         }}
         style={{
-          width: panelProps.mobile ? undefined : `${panel()}px`,
+          width: panelProps.mobile || panelProps.inline ? undefined : `${panel()}px`,
         }}
       >
         <Show
@@ -2000,145 +2057,150 @@ export default function LegacyLayout(props: ParentProps) {
         >
           {(project) => (
             <>
-              <div class="shrink-0 pl-1 py-1">
-                <div class="group/project flex items-start justify-between gap-2 py-2 pl-2 pr-0">
-                  <div class="flex flex-col min-w-0">
-                    <InlineEditor
-                      id={`project:${projectId()}`}
-                      value={projectName}
-                      onSave={(next) => {
-                        void renameProject(project, next)
-                      }}
-                      class="text-14-medium text-text-strong truncate"
-                      displayClass="text-14-medium text-text-strong truncate"
-                      stopPropagation
-                    />
+              <Show when={!panelProps.inline}>
+                <div class="shrink-0 pl-1 py-1">
+                  <div class="group/project flex items-start justify-between gap-2 py-2 pl-2 pr-0">
+                    <div class="flex flex-col min-w-0">
+                      <InlineEditor
+                        id={`project:${projectId()}`}
+                        value={projectName}
+                        onSave={(next) => {
+                          void renameProject(project, next)
+                        }}
+                        class="text-14-medium text-text-strong truncate"
+                        displayClass="text-14-medium text-text-strong truncate"
+                        stopPropagation
+                      />
 
-                    <Tooltip
-                      placement="bottom"
-                      gutter={2}
-                      value={worktree()}
-                      class="shrink-0"
-                      contentStyle={{
-                        "max-width": "640px",
-                        transform: "translate3d(52px, 0, 0)",
-                      }}
-                    >
-                      <span class="text-12-regular text-text-base truncate select-text">
-                        {worktree().replace(homedir(), "~")}
-                      </span>
-                    </Tooltip>
+                      <Tooltip
+                        placement="bottom"
+                        gutter={2}
+                        value={worktree()}
+                        class="shrink-0"
+                        contentStyle={{
+                          "max-width": "640px",
+                          transform: "translate3d(52px, 0, 0)",
+                        }}
+                      >
+                        <span class="text-12-regular text-text-base truncate select-text">
+                          {worktree().replace(homedir(), "~")}
+                        </span>
+                      </Tooltip>
+                    </div>
+
+                    <DropdownMenu modal={!sidebarHovering()}>
+                      <DropdownMenu.Trigger
+                        as={IconButton}
+                        icon="dot-grid"
+                        variant="ghost"
+                        data-action="project-menu"
+                        data-project={slug()}
+                        class="shrink-0 size-6 rounded-md transition-opacity data-[expanded]:bg-surface-base-active"
+                        classList={{
+                          "opacity-100": panelProps.mobile || merged(),
+                          "opacity-0 group-hover/project:opacity-100 group-focus-within/project:opacity-100 data-[expanded]:opacity-100":
+                            !panelProps.mobile && !merged(),
+                        }}
+                        aria-label={language.t("common.moreOptions")}
+                      />
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content class="mt-1">
+                          <DropdownMenu.Item
+                            onSelect={() => {
+                              showEditProjectDialog(server.current!, project)
+                            }}
+                          >
+                            <DropdownMenu.ItemLabel>{language.t("common.edit")}</DropdownMenu.ItemLabel>
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            data-action="project-workspaces-toggle"
+                            data-project={slug()}
+                            disabled={!canToggle()}
+                            onSelect={() => {
+                              toggleProjectWorkspaces(project)
+                            }}
+                          >
+                            <DropdownMenu.ItemLabel>
+                              {workspacesEnabled()
+                                ? language.t("sidebar.workspaces.disable")
+                                : language.t("sidebar.workspaces.enable")}
+                            </DropdownMenu.ItemLabel>
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            data-action="project-clear-notifications"
+                            data-project={slug()}
+                            disabled={unseenCount() === 0}
+                            onSelect={clearNotifications}
+                          >
+                            <DropdownMenu.ItemLabel>
+                              {language.t("sidebar.project.clearNotifications")}
+                            </DropdownMenu.ItemLabel>
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Separator />
+                          <DropdownMenu.Item
+                            data-action="project-close-menu"
+                            data-project={slug()}
+                            onSelect={() => {
+                              const dir = worktree()
+                              if (!dir) return
+                              closeProject(dir)
+                            }}
+                          >
+                            <DropdownMenu.ItemLabel>{language.t("common.close")}</DropdownMenu.ItemLabel>
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu>
                   </div>
-
-                  <DropdownMenu modal={!sidebarHovering()}>
-                    <DropdownMenu.Trigger
-                      as={IconButton}
-                      icon="dot-grid"
-                      variant="ghost"
-                      data-action="project-menu"
-                      data-project={slug()}
-                      class="shrink-0 size-6 rounded-md transition-opacity data-[expanded]:bg-surface-base-active"
-                      classList={{
-                        "opacity-100": panelProps.mobile || merged(),
-                        "opacity-0 group-hover/project:opacity-100 group-focus-within/project:opacity-100 data-[expanded]:opacity-100":
-                          !panelProps.mobile && !merged(),
-                      }}
-                      aria-label={language.t("common.moreOptions")}
-                    />
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content class="mt-1">
-                        <DropdownMenu.Item
-                          onSelect={() => {
-                            showEditProjectDialog(server.current!, project)
-                          }}
-                        >
-                          <DropdownMenu.ItemLabel>{language.t("common.edit")}</DropdownMenu.ItemLabel>
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          data-action="project-workspaces-toggle"
-                          data-project={slug()}
-                          disabled={!canToggle()}
-                          onSelect={() => {
-                            toggleProjectWorkspaces(project)
-                          }}
-                        >
-                          <DropdownMenu.ItemLabel>
-                            {workspacesEnabled()
-                              ? language.t("sidebar.workspaces.disable")
-                              : language.t("sidebar.workspaces.enable")}
-                          </DropdownMenu.ItemLabel>
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          data-action="project-clear-notifications"
-                          data-project={slug()}
-                          disabled={unseenCount() === 0}
-                          onSelect={clearNotifications}
-                        >
-                          <DropdownMenu.ItemLabel>
-                            {language.t("sidebar.project.clearNotifications")}
-                          </DropdownMenu.ItemLabel>
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Separator />
-                        <DropdownMenu.Item
-                          data-action="project-close-menu"
-                          data-project={slug()}
-                          onSelect={() => {
-                            const dir = worktree()
-                            if (!dir) return
-                            closeProject(dir)
-                          }}
-                        >
-                          <DropdownMenu.ItemLabel>{language.t("common.close")}</DropdownMenu.ItemLabel>
-                        </DropdownMenu.Item>
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu>
                 </div>
-              </div>
+              </Show>
 
               <div class="flex-1 min-h-0 flex flex-col">
                 <Show
                   when={workspacesEnabled()}
                   fallback={
-                    <>
-                      <div class="shrink-0 py-4">
-                        <Button
-                          size="large"
-                          class="w-full"
-                          onClick={() => {
-                            const dir = worktree()
-                            if (!dir) return
-                            navigateWithSidebarReset(`/${base64Encode(dir)}/session`)
-                          }}
-                        >
-                          <IconV2 name="edit" size="small" />
-                          {language.t("command.session.new")}
-                        </Button>
-                      </div>
-                      <div class="flex-1 min-h-0">
-                        <LocalWorkspace
-                          ctx={workspaceSidebarCtx}
-                          project={project}
-                          sortNow={sortNow}
-                          mobile={panelProps.mobile}
-                        />
-                      </div>
-                    </>
+                    <div class="flex-1 min-h-0">
+                      <Show when={!panelProps.inline}>
+                        <div class="shrink-0 py-4">
+                          <Button
+                            size="large"
+                            class="w-full"
+                            onClick={() => {
+                              const dir = worktree()
+                              if (!dir) return
+                              navigateToNewSessionRoute(dir)
+                            }}
+                          >
+                            <IconV2 name="edit" size="small" />
+                            {language.t("command.session.new")}
+                          </Button>
+                        </div>
+                      </Show>
+                      <LocalWorkspace
+                        ctx={workspaceSidebarCtx}
+                        project={project}
+                        sortNow={sortNow}
+                        mobile={panelProps.mobile}
+                        inline={panelProps.inline}
+                      />
+                    </div>
                   }
                 >
                   <>
-                    <div class="shrink-0 py-4">
-                      <Button
-                        size="large"
-                        icon="plus-small"
-                        class="w-full"
-                        onClick={() => {
-                          void createWorkspace(project)
-                        }}
-                      >
-                        {language.t("workspace.new")}
-                      </Button>
-                    </div>
+                    <Show when={!panelProps.inline}>
+                      <div class="shrink-0 py-4">
+                        <Button
+                          size="large"
+                          icon="plus-small"
+                          class="w-full"
+                          onClick={() => {
+                            void createWorkspace(project)
+                          }}
+                        >
+                          {language.t("workspace.new")}
+                        </Button>
+                      </div>
+                    </Show>
                     <div class="relative flex-1 min-h-0">
                       <DragDropProvider
                         onDragStart={handleWorkspaceDragStart}
@@ -2225,12 +2287,19 @@ export default function LegacyLayout(props: ParentProps) {
       aimMove={aim.move}
       projects={projects}
       renderProject={(project) => (
-        <SortableProject ctx={projectSidebarCtx} project={project} sortNow={sortNow} mobile={mobile} />
+        <SortableProject
+          ctx={projectSidebarCtx}
+          project={project}
+          sortNow={sortNow}
+          mobile={mobile}
+          renderPanel={() => <SidebarPanel project={project} mobile={mobile} inline />}
+        />
       )}
       handleDragStart={handleDragStart}
       handleDragEnd={handleDragEnd}
       handleDragOver={handleDragOver}
       openProjectLabel={language.t("command.project.open")}
+      projectsLabel={language.t("home.projects")}
       openProjectKeybind={() => command.keybind("project.open")}
       onOpenProject={chooseProject}
       renderProjectOverlay={projectOverlay}
@@ -2239,14 +2308,11 @@ export default function LegacyLayout(props: ParentProps) {
       onOpenSettings={openSettings}
       helpLabel={() => language.t("sidebar.help")}
       onOpenHelp={() => platform.openExternal("https://opencode.ai/desktop-feedback")}
-      renderPanel={() =>
-        mobile ? <SidebarPanel project={currentProject} mobile /> : <SidebarPanel project={currentProject} merged />
-      }
     />
   )
 
   return (
-    <div class="relative bg-background-base flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text">
+    <div class="relative bg-background-stronger flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text">
       {autoselecting() ?? ""}
       <Titlebar
         update={titlebarUpdate}
@@ -2261,16 +2327,17 @@ export default function LegacyLayout(props: ParentProps) {
       </Show>
       <div class="flex-1 min-h-0 min-w-0 flex">
         <div class="flex-1 min-h-0 relative">
-          <div class="size-full relative overflow-x-hidden">
+          <div class="size-full relative flex overflow-x-hidden">
             <nav
               aria-label={language.t("sidebar.nav.projectsAndSessions")}
               data-component="sidebar-nav-desktop"
               classList={{
-                "hidden xl:block": true,
-                "absolute inset-y-0 start-0": true,
-                "z-10": true,
+                "hidden xl:flex shrink-0": true,
+                "relative z-10": true,
+                "transition-[width] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none":
+                  !state.sizing,
               }}
-              style={{ width: `${side()}px` }}
+              style={{ width: `${sidebarWidth()}px` }}
               ref={(el) => {
                 setState("nav", el)
               }}
@@ -2340,19 +2407,14 @@ export default function LegacyLayout(props: ParentProps) {
 
             <div
               classList={{
-                "absolute inset-0": true,
-                "xl:inset-y-0 xl:end-0 xl:start-[var(--main-left)]": true,
-                "z-20": true,
-                "transition-[inset-inline-start] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[inset-inline-start] motion-reduce:transition-none":
+                "relative z-20 min-w-0 flex-1": true,
+                "transition-[width] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
                   !state.sizing,
-              }}
-              style={{
-                "--main-left": layout.sidebar.opened() ? `${side()}px` : "4rem",
               }}
             >
               <main
                 classList={{
-                  "size-full overflow-x-hidden flex flex-col items-start contain-strict border-t border-border-weak-base bg-background-base xl:border-s xl:rounded-ss-[12px]": true,
+                  "size-full overflow-x-hidden flex flex-col items-start contain-strict border-t border-border-weak-base bg-background-base xl:border-s xl:rounded-ss-[14px]": true,
                 }}
               >
                 <Show when={!autoselecting.loading} fallback={<div class="size-full" />}>
@@ -2404,7 +2466,7 @@ export default function LegacyLayout(props: ParentProps) {
         {import.meta.env.DEV && import.meta.env.VITE_DISABLE_DEBUG_BAR !== "1" && state.debugTools && <DebugBar />}
       </div>
       <TabsInfoPopup />
-      <ToastRegion v2={false} />
+      <ToastRegion v2={settings.general.newLayoutDesigns()} />
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -52,6 +52,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
   const view = props.controller.view
   let editor: HTMLDivElement | undefined
   let localInput = false
+  const [composing, setComposing] = createSignal(false)
   const updateCursor = () => {
     if (!editor || !window.getSelection()?.isCollapsed) return
     props.controller.onCursor(promptInputV2Cursor(editor))
@@ -65,7 +66,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
 
   createEffect(() => {
     const parts = props.controller.parts()
-    if (!editor) return
+    if (!editor || composing()) return
     if (localInput) {
       localInput = false
       return
@@ -169,9 +170,13 @@ export function PromptInputV2(props: PromptInputV2Props) {
               localInput = true
               props.controller.onInput(prompt.map((part) => part.content).join(""), [...prompt, ...images], cursor)
             }}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => setComposing(false)}
             onKeyDown={(event) => {
+              const ime = event.isComposing || composing() || event.keyCode === 229
+              if (ime && event.key === "Enter") return
               if (props.controller.onKeyDown(event)) return
-              if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+              if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault()
                 if (event.repeat) return
                 props.controller.submit()

@@ -1770,6 +1770,24 @@ export type ProviderConfig = {
       reasoning?: boolean
       temperature?: boolean
       tool_call?: boolean
+      contextWindow?: number
+      maxInputTokens?: number
+      maxOutputTokens?: number
+      reservedOutputTokenSpace?: number
+      supportsSystemMessage?: string
+      specialToolFormat?: string
+      supportsFIM?: boolean
+      supportsVision?: boolean
+      reasoningCapabilities?: {
+        supportsReasoning: boolean
+        canTurnOffReasoning: boolean
+        canIOReasoning: boolean
+        reasoningSlider?: {
+          type: "effort_slider"
+          values: Array<string>
+          default: string
+        }
+      }
       interleaved?:
         | boolean
         | "reasoning"
@@ -1805,6 +1823,7 @@ export type ProviderConfig = {
       provider?: {
         npm?: string
         api?: string
+        endpoint?: "chat" | "responses"
       }
       options?: {
         [key: string]: unknown
@@ -2032,6 +2051,119 @@ export type Config = {
   }
 }
 
+export type ProviderConfigUpdate = {
+  settings?: {
+    api?: string
+    name?: string
+    env?: Array<string>
+    id?: string
+    npm?: string
+    whitelist?: Array<string>
+    blacklist?: Array<string>
+    options?: {
+      apiKey?: string
+      baseURL?: string
+      enterpriseUrl?: string
+      setCacheKey?: boolean
+      /**
+       * Timeout in milliseconds for full requests to this provider. Set to false to disable timeout.
+       */
+      timeout?: number | false
+      /**
+       * Timeout in milliseconds to wait for response headers (default: 300000). Set to false to disable timeout.
+       */
+      headerTimeout?: number | false
+      /**
+       * Timeout in milliseconds between streamed SSE chunks for this provider (default: 300000). If no chunk arrives within this window, the request is aborted. Set to false to disable timeout.
+       */
+      chunkTimeout?: number | false
+    }
+    models?: unknown
+  }
+  models?: {
+    [key: string]: {
+      id?: string
+      name?: string
+      family?: string
+      release_date?: string
+      attachment?: boolean
+      reasoning?: boolean
+      temperature?: boolean
+      tool_call?: boolean
+      contextWindow?: number
+      maxInputTokens?: number
+      maxOutputTokens?: number
+      reservedOutputTokenSpace?: number
+      supportsSystemMessage?: string
+      specialToolFormat?: string
+      supportsFIM?: boolean
+      supportsVision?: boolean
+      reasoningCapabilities?: {
+        supportsReasoning: boolean
+        canTurnOffReasoning: boolean
+        canIOReasoning: boolean
+        reasoningSlider?: {
+          type: "effort_slider"
+          values: Array<string>
+          default: string
+        }
+      }
+      interleaved?:
+        | boolean
+        | "reasoning"
+        | "reasoning_content"
+        | "reasoning_text"
+        | string
+        | {
+            field: "reasoning" | "reasoning_content" | "reasoning_text" | string
+          }
+      cost?: {
+        input: number
+        output: number
+        cache_read?: number
+        cache_write?: number
+        context_over_200k?: {
+          input: number
+          output: number
+          cache_read?: number
+          cache_write?: number
+        }
+      }
+      limit?: {
+        context: number
+        input?: number
+        output: number
+      }
+      modalities?: {
+        input?: Array<"text" | "audio" | "image" | "video" | "pdf">
+        output?: Array<"text" | "audio" | "image" | "video" | "pdf">
+      }
+      experimental?: boolean
+      status?: "alpha" | "beta" | "deprecated" | "active"
+      provider?: {
+        npm?: string
+        api?: string
+        endpoint?: "chat" | "responses"
+      }
+      options?: {
+        [key: string]: unknown
+      }
+      headers?: {
+        [key: string]: string
+      }
+      /**
+       * Variant-specific configuration
+       */
+      variants?: {
+        [key: string]: {
+          disabled?: boolean
+        }
+      }
+    }
+  }
+  remove?: Array<string>
+}
+
 export type Model = {
   id: string
   providerID: string
@@ -2039,6 +2171,7 @@ export type Model = {
     id: string
     url: string
     npm: string
+    endpoint?: "chat" | "responses" | "messages"
   }
   name: string
   family?: string
@@ -7328,6 +7461,89 @@ export type GlobalConfigUpdateResponses = {
 }
 
 export type GlobalConfigUpdateResponse = GlobalConfigUpdateResponses[keyof GlobalConfigUpdateResponses]
+
+export type GlobalConfigProviderRemoveData = {
+  body?: never
+  path: {
+    providerID: string
+  }
+  query?: never
+  url: "/global/config/provider/{providerID}"
+}
+
+export type GlobalConfigProviderRemoveErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalConfigProviderRemoveError = GlobalConfigProviderRemoveErrors[keyof GlobalConfigProviderRemoveErrors]
+
+export type GlobalConfigProviderRemoveResponses = {
+  /**
+   * Global config after removing the provider
+   */
+  200: Config
+}
+
+export type GlobalConfigProviderRemoveResponse =
+  GlobalConfigProviderRemoveResponses[keyof GlobalConfigProviderRemoveResponses]
+
+export type GlobalConfigProviderPatchData = {
+  body?: ProviderConfigUpdate
+  path: {
+    providerID: string
+  }
+  query?: never
+  url: "/global/config/provider/{providerID}"
+}
+
+export type GlobalConfigProviderPatchErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalConfigProviderPatchError = GlobalConfigProviderPatchErrors[keyof GlobalConfigProviderPatchErrors]
+
+export type GlobalConfigProviderPatchResponses = {
+  /**
+   * Global config after updating the provider
+   */
+  200: Config
+}
+
+export type GlobalConfigProviderPatchResponse =
+  GlobalConfigProviderPatchResponses[keyof GlobalConfigProviderPatchResponses]
+
+export type GlobalConfigProviderSetData = {
+  body?: ProviderConfig
+  path: {
+    providerID: string
+  }
+  query?: never
+  url: "/global/config/provider/{providerID}"
+}
+
+export type GlobalConfigProviderSetErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalConfigProviderSetError = GlobalConfigProviderSetErrors[keyof GlobalConfigProviderSetErrors]
+
+export type GlobalConfigProviderSetResponses = {
+  /**
+   * Global config after replacing the provider
+   */
+  200: Config
+}
+
+export type GlobalConfigProviderSetResponse = GlobalConfigProviderSetResponses[keyof GlobalConfigProviderSetResponses]
 
 export type GlobalDisposeData = {
   body?: never

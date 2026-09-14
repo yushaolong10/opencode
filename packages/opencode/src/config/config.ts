@@ -11,18 +11,19 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { applyEdits, modify } from "jsonc-parser"
-import { InstallationLocal, InstallationVersion } from "@opencode-ai/core/installation/version"
+import { InstallationDependencyVersion } from "@opencode-ai/core/installation/version"
 import { existsSync } from "fs"
 import { Account } from "@/account/account"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@opencode-ai/core/v1/config/console-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Semaphore } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
 import { containsPath, type InstanceContext } from "../project/instance-context"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { ConfigProviderV1 } from "@opencode-ai/core/v1/config/provider"
 import { RemoteAuthError } from "@opencode-ai/core/v1/config/error"
 import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { ConfigPluginV1 } from "@opencode-ai/core/v1/config/plugin"
@@ -128,6 +129,15 @@ export interface Interface {
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
   readonly update: (config: Info) => Effect.Effect<void>
   readonly updateGlobal: (config: Info) => Effect.Effect<{ info: Info; changed: boolean }>
+  readonly setGlobalProvider: (
+    providerID: string,
+    provider: ConfigProviderV1.Info,
+  ) => Effect.Effect<{ info: Info; changed: boolean }>
+  readonly removeGlobalProvider: (providerID: string) => Effect.Effect<{ info: Info; changed: boolean }>
+  readonly patchGlobalProvider: (
+    providerID: string,
+    patch: ConfigProviderV1.Update,
+  ) => Effect.Effect<{ info: Info; changed: boolean }>
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
   readonly waitForDependencies: () => Effect.Effect<void>
@@ -182,6 +192,7 @@ const layer = Layer.effect(
     const env = yield* Env.Service
     const npmSvc = yield* Npm.Service
     const http = yield* HttpClient.HttpClient
+    const writes = Semaphore.makeUnsafe(1)
 
     const readConfigFile = (filepath: string) => fs.readFileStringSafe(filepath).pipe(Effect.orDie)
 
@@ -454,7 +465,7 @@ const layer = Layer.effect(
               add: [
                 {
                   name: "@opencode-ai/plugin",
-                  version: InstallationLocal ? undefined : InstallationVersion,
+                  version: InstallationDependencyVersion,
                 },
               ],
             })
@@ -679,12 +690,136 @@ const layer = Layer.effect(
       return { info: next, changed }
     })
 
+    const removeGlobalProvider = Effect.fn("Config.removeGlobalProvider")(function* (providerID: string) {
+      const file = globalConfigFile()
+      const before = (yield* readConfigFile(file)) ?? "{}"
+      const original = ConfigParse.jsonc(before, file)
+      const provider = isRecord(original) && isRecord(original.provider) ? original.provider : {}
+      const disabled =
+        isRecord(original) && Array.isArray(original.disabled_providers)
+          ? original.disabled_providers.filter((id) => id !== providerID)
+          : undefined
+      const enabled =
+        isRecord(original) && Array.isArray(original.enabled_providers)
+          ? original.enabled_providers.filter((id) => id !== providerID)
+          : undefined
+      const patch = {
+        ...(providerID in provider ? { provider: { [providerID]: undefined } } : {}),
+        ...(disabled ? { disabled_providers: disabled } : {}),
+        ...(enabled ? { enabled_providers: enabled } : {}),
+      }
+      const updated = patchJsonc(before, patch)
+      const next = yield* decodeConfig(ConfigParse.jsonc(updated, file), file)
+      const changed = updated !== before
+      if (changed) {
+        yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+        yield* invalidate()
+      }
+      return { info: next, changed }
+    })
+
+    const setGlobalProvider = Effect.fn("Config.setGlobalProvider")(function* (
+      providerID: string,
+      providerConfig: ConfigProviderV1.Info,
+    ) {
+      const file = globalConfigFile()
+      const before = (yield* readConfigFile(file)) ?? "{}"
+      const original = ConfigParse.jsonc(before, file)
+      const providers = isRecord(original) && isRecord(original.provider) ? original.provider : {}
+      const disabled =
+        isRecord(original) && Array.isArray(original.disabled_providers)
+          ? original.disabled_providers.filter((id) => id !== providerID)
+          : undefined
+      const enabled =
+        isRecord(original) && Array.isArray(original.enabled_providers)
+          ? Array.from(new Set([...original.enabled_providers, providerID]))
+          : undefined
+      const updated = file.endsWith(".jsonc")
+        ? patchJsonc(
+            applyEdits(
+              before,
+              modify(before, ["provider", providerID], providerConfig, {
+                formattingOptions: { insertSpaces: true, tabSize: 2 },
+              }),
+            ),
+            {
+              ...(disabled ? { disabled_providers: disabled } : {}),
+              ...(enabled ? { enabled_providers: enabled } : {}),
+            },
+          )
+        : JSON.stringify(
+            {
+              ...(isRecord(original) ? original : {}),
+              provider: { ...providers, [providerID]: providerConfig },
+              ...(disabled ? { disabled_providers: disabled } : {}),
+              ...(enabled ? { enabled_providers: enabled } : {}),
+            },
+            null,
+            2,
+          )
+      const next = yield* decodeConfig(ConfigParse.jsonc(updated, file), file)
+      const changed = updated !== before
+      if (changed) {
+        yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+        yield* invalidate()
+      }
+      return { info: next, changed }
+    })
+
+    const patchGlobalProvider = Effect.fn("Config.patchGlobalProvider")(function* (
+      providerID: string,
+      patch: ConfigProviderV1.Update,
+    ) {
+      const file = globalConfigFile()
+      const before = (yield* readConfigFile(file)) ?? "{}"
+      const settings = Object.entries(patch.settings ?? {}).reduce(
+        (text, [key, value]) =>
+          applyEdits(
+            text,
+            modify(text, ["provider", providerID, key], value, {
+              formattingOptions: { insertSpaces: true, tabSize: 2 },
+            }),
+          ),
+        before,
+      )
+      const removed = (patch.remove ?? []).reduce(
+        (text, id) =>
+          applyEdits(
+            text,
+            modify(text, ["provider", providerID, "models", id], undefined, {
+              formattingOptions: { insertSpaces: true, tabSize: 2 },
+            }),
+          ),
+        settings,
+      )
+      const updated = Object.entries(patch.models ?? {}).reduce(
+        (text, [id, model]) =>
+          applyEdits(
+            text,
+            modify(text, ["provider", providerID, "models", id], model ?? undefined, {
+              formattingOptions: { insertSpaces: true, tabSize: 2 },
+            }),
+          ),
+        removed,
+      )
+      const next = yield* decodeConfig(ConfigParse.jsonc(updated, file), file)
+      const changed = updated !== before
+      if (changed) {
+        yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+        yield* invalidate()
+      }
+      return { info: next, changed }
+    })
+
     return Service.of({
       get,
       getGlobal,
       getConsoleState,
       update,
-      updateGlobal,
+      updateGlobal: (config) => writes.withPermits(1)(updateGlobal(config)),
+      setGlobalProvider: (id, config) => writes.withPermits(1)(setGlobalProvider(id, config)),
+      patchGlobalProvider: (id, patch) => writes.withPermits(1)(patchGlobalProvider(id, patch)),
+      removeGlobalProvider: (id) => writes.withPermits(1)(removeGlobalProvider(id)),
       invalidate,
       directories,
       waitForDependencies,

@@ -78,6 +78,12 @@ import type {
   FormatterStatusResponses,
   GlobalConfigGetErrors,
   GlobalConfigGetResponses,
+  GlobalConfigProviderPatchErrors,
+  GlobalConfigProviderPatchResponses,
+  GlobalConfigProviderRemoveErrors,
+  GlobalConfigProviderRemoveResponses,
+  GlobalConfigProviderSetErrors,
+  GlobalConfigProviderSetResponses,
   GlobalConfigUpdateErrors,
   GlobalConfigUpdateResponses,
   GlobalDisposeErrors,
@@ -145,6 +151,8 @@ import type {
   PromptInput,
   ProviderAuthErrors,
   ProviderAuthResponses,
+  ProviderConfig,
+  ProviderConfigUpdate,
   ProviderListErrors,
   ProviderListResponses,
   ProviderOauthAuthorizeErrors,
@@ -1277,6 +1285,109 @@ export class Experimental extends HeyApiClient {
   }
 }
 
+export class Provider extends HeyApiClient {
+  /**
+   * Remove global provider configuration
+   *
+   * Remove a custom provider and its references from the global configuration.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "providerID" }] }])
+    return (options?.client ?? this.client).delete<
+      GlobalConfigProviderRemoveResponses,
+      GlobalConfigProviderRemoveErrors,
+      ThrowOnError
+    >({
+      url: "/global/config/provider/{providerID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update selected provider settings and models
+   *
+   * Replace only supplied model entries and delete IDs listed in remove. Other models are preserved.
+   */
+  public patch<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: string
+      providerConfigUpdate?: ProviderConfigUpdate
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { key: "providerConfigUpdate", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      GlobalConfigProviderPatchResponses,
+      GlobalConfigProviderPatchErrors,
+      ThrowOnError
+    >({
+      url: "/global/config/provider/{providerID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Set global provider configuration
+   *
+   * Create or fully replace a custom provider in the global configuration.
+   */
+  public set<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: string
+      providerConfig?: ProviderConfig
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { key: "providerConfig", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<
+      GlobalConfigProviderSetResponses,
+      GlobalConfigProviderSetErrors,
+      ThrowOnError
+    >({
+      url: "/global/config/provider/{providerID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Config extends HeyApiClient {
   /**
    * Get global configuration
@@ -1312,6 +1423,11 @@ export class Config extends HeyApiClient {
         ...params.headers,
       },
     })
+  }
+
+  private _provider?: Provider
+  get provider(): Provider {
+    return (this._provider ??= new Provider({ client: this.client }))
   }
 }
 
@@ -3292,7 +3408,7 @@ export class Oauth extends HeyApiClient {
   }
 }
 
-export class Provider extends HeyApiClient {
+export class Provider2 extends HeyApiClient {
   /**
    * List providers
    *
@@ -5897,7 +6013,7 @@ export class Model extends HeyApiClient {
   }
 }
 
-export class Provider2 extends HeyApiClient {
+export class Provider3 extends HeyApiClient {
   /**
    * List providers
    *
@@ -7013,9 +7129,9 @@ export class V2 extends HeyApiClient {
     return (this._model ??= new Model({ client: this.client }))
   }
 
-  private _provider?: Provider2
-  get provider(): Provider2 {
-    return (this._provider ??= new Provider2({ client: this.client }))
+  private _provider?: Provider3
+  get provider(): Provider3 {
+    return (this._provider ??= new Provider3({ client: this.client }))
   }
 
   private _integration?: Integration
@@ -7187,9 +7303,9 @@ export class OpencodeClient extends HeyApiClient {
     return (this._permission ??= new Permission({ client: this.client }))
   }
 
-  private _provider?: Provider
-  get provider(): Provider {
-    return (this._provider ??= new Provider({ client: this.client }))
+  private _provider?: Provider2
+  get provider(): Provider2 {
+    return (this._provider ??= new Provider2({ client: this.client }))
   }
 
   private _session?: Session2

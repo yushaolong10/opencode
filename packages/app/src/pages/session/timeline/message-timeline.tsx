@@ -129,12 +129,30 @@ const markBoundaryGesture = (input: {
   }
 }
 
-function TimelineThinkingRow(props: { reasoningHeading?: string; showReasoningSummaries: boolean }) {
+function TimelineThinkingRow(props: { reasoningHeading?: string; showReasoningSummaries: boolean; startedAt: number }) {
   const language = useLanguage()
+  const [now, setNow] = createSignal(Date.now())
+
+  onMount(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    onCleanup(() => window.clearInterval(timer))
+  })
+
+  const duration = createMemo(() => {
+    const total = Math.max(0, Math.floor((now() - props.startedAt) / 1000))
+    if (total < 60) return language.t("ui.message.duration.seconds", { count: total })
+    return language.t("ui.message.duration.minutesSeconds", {
+      minutes: Math.floor(total / 60),
+      seconds: total % 60,
+    })
+  })
 
   return (
     <div data-slot="session-turn-thinking">
-      <TextShimmer text={language.t("ui.sessionTurn.status.thinking")} />
+      <div class="flex items-center gap-2">
+        <TextShimmer text={language.t("ui.sessionTurn.status.thinking")} />
+        <span class="text-12-regular text-text-weak tabular-nums">{duration()}</span>
+      </div>
       <Show when={!props.showReasoningSummaries}>
         <TextReveal text={props.reasoningHeading} class="session-turn-thinking-heading" travel={25} duration={700} />
       </Show>
@@ -1186,6 +1204,7 @@ export function MessageTimeline(props: {
               <TimelineThinkingRow
                 reasoningHeading={thinkingRow().reasoningHeading}
                 showReasoningSummaries={settings.general.showReasoningSummaries()}
+                startedAt={thinkingRow().startedAt}
               />
             </div>
           </TimelineRowFrame>

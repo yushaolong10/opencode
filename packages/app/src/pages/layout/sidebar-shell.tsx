@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
+import { createMemo, For, type Accessor, type JSX } from "solid-js"
 import {
   DragDropProvider,
   DragDropSensors,
@@ -17,11 +17,12 @@ export const SidebarContent = (props: {
   opened: Accessor<boolean>
   aimMove: (event: MouseEvent) => void
   projects: Accessor<LocalProject[]>
-  renderProject: (project: LocalProject) => JSX.Element
+  renderProject: (project: Accessor<LocalProject>) => JSX.Element
   handleDragStart: (event: unknown) => void
   handleDragEnd: () => void
   handleDragOver: (event: DragEvent) => void
   openProjectLabel: JSX.Element
+  projectsLabel: string
   openProjectKeybind: Accessor<string | undefined>
   onOpenProject: () => void
   renderProjectOverlay: () => JSX.Element
@@ -30,96 +31,143 @@ export const SidebarContent = (props: {
   onOpenSettings: () => void
   helpLabel: Accessor<string>
   onOpenHelp: () => void
-  renderPanel: () => JSX.Element
 }): JSX.Element => {
   const expanded = createMemo(() => !!props.mobile || props.opened())
   const placement = () => (props.mobile ? "bottom" : "right")
-  let panel: HTMLDivElement | undefined
 
-  createEffect(() => {
-    const el = panel
-    if (!el) return
-    if (expanded()) {
-      el.removeAttribute("inert")
-      return
-    }
-    el.setAttribute("inert", "")
-  })
+  const projects = (
+    <DragDropProvider
+      onDragStart={props.handleDragStart}
+      onDragEnd={props.handleDragEnd}
+      onDragOver={props.handleDragOver}
+      collisionDetector={closestCenter}
+    >
+      <DragDropSensors />
+      <ConstrainDragXAxis />
+      <SortableProvider ids={props.projects().map((project) => project.worktree)}>
+        <For each={props.projects().map((project) => project.worktree)}>
+          {(worktree) => <SidebarProjectSlot projects={props.projects} worktree={worktree} render={props.renderProject} />}
+        </For>
+      </SortableProvider>
+      <DragOverlay>{props.renderProjectOverlay()}</DragOverlay>
+    </DragDropProvider>
+  )
+
+  const actions = (
+    <div
+      classList={{
+        "shrink-0 flex gap-2": true,
+        "w-full items-center justify-between border-t border-border-weaker-base px-3 py-3": expanded(),
+        "flex-col items-center pt-3 pb-6": !expanded(),
+      }}
+    >
+      <TooltipKeybind placement={placement()} title={props.settingsLabel()} keybind={props.settingsKeybind() ?? ""}>
+        <IconButton
+          icon="settings-gear"
+          variant="ghost"
+          size="large"
+          onClick={props.onOpenSettings}
+          aria-label={props.settingsLabel()}
+        />
+      </TooltipKeybind>
+      <Tooltip placement={placement()} value={props.helpLabel()}>
+        <IconButton
+          icon="help"
+          variant="ghost"
+          size="large"
+          onClick={props.onOpenHelp}
+          aria-label={props.helpLabel()}
+        />
+      </Tooltip>
+    </div>
+  )
 
   return (
-    <div class="flex h-full w-full min-w-0 overflow-hidden">
+    <div
+      data-component="sidebar-shell"
+      data-expanded={expanded() ? "true" : "false"}
+      class="flex h-full w-full min-w-0 overflow-hidden bg-background-stronger"
+    >
       <div
         data-component="sidebar-rail"
-        class="w-16 shrink-0 bg-background-base flex flex-col items-center overflow-hidden"
+        class="flex min-w-0 flex-1 flex-col overflow-hidden"
         onMouseMove={props.aimMove}
       >
-        <div class="flex-1 min-h-0 w-full">
-          <DragDropProvider
-            onDragStart={props.handleDragStart}
-            onDragEnd={props.handleDragEnd}
-            onDragOver={props.handleDragOver}
-            collisionDetector={closestCenter}
+        <section
+          class="flex min-h-0 flex-1 flex-col transition-[padding] duration-200 motion-reduce:transition-none"
+          classList={{
+            "px-3 pt-3 pb-2": expanded(),
+            "px-3 py-3": !expanded(),
+          }}
+          aria-label={props.projectsLabel}
+        >
+          <div
+            class="flex items-center justify-between overflow-hidden px-2 transition-[height,margin,opacity] duration-200 motion-reduce:transition-none"
+            classList={{
+              "mb-2 h-8 opacity-100": expanded(),
+              "m-0 h-0 opacity-0 pointer-events-none": !expanded(),
+            }}
+            aria-hidden={!expanded()}
           >
-            <DragDropSensors />
-            <ConstrainDragXAxis />
-            <div class="h-full w-full flex flex-col items-center gap-3 px-3 py-3 overflow-y-auto no-scrollbar">
-              <SortableProvider ids={props.projects().map((p) => p.worktree)}>
-                <For each={props.projects()}>{(project) => props.renderProject(project)}</For>
-              </SortableProvider>
-              <Tooltip
-                placement={placement()}
-                value={
-                  <div class="flex items-center gap-2">
-                    <span>{props.openProjectLabel}</span>
-                    <Show when={!props.mobile && !!props.openProjectKeybind()}>
-                      <span class="text-icon-base text-12-medium">{props.openProjectKeybind()}</span>
-                    </Show>
-                  </div>
-                }
+            <span class="text-12-medium text-text-weak">{props.projectsLabel}</span>
+            <Tooltip placement="bottom" value={props.openProjectLabel}>
+              <IconButton
+                icon="plus"
+                variant="ghost"
+                size="small"
+                tabIndex={expanded() ? 0 : -1}
+                onClick={props.onOpenProject}
+                aria-label={typeof props.openProjectLabel === "string" ? props.openProjectLabel : undefined}
+              />
+            </Tooltip>
+          </div>
+          <div class="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+            <div
+              class="flex w-full flex-col transition-[gap] duration-200 motion-reduce:transition-none"
+              classList={{
+                "gap-1": expanded(),
+                "items-center gap-3": !expanded(),
+              }}
+            >
+              {projects}
+              <div
+                class="flex justify-center overflow-hidden transition-[height,opacity] duration-200 motion-reduce:transition-none"
+                classList={{
+                  "h-0 opacity-0 pointer-events-none": expanded(),
+                  "h-10 opacity-100": !expanded(),
+                }}
+                aria-hidden={expanded()}
               >
-                <IconButton
-                  icon="plus"
-                  variant="ghost"
-                  size="large"
-                  onClick={props.onOpenProject}
-                  aria-label={typeof props.openProjectLabel === "string" ? props.openProjectLabel : undefined}
-                />
-              </Tooltip>
+                <Tooltip placement={placement()} value={props.openProjectLabel}>
+                  <IconButton
+                    icon="plus"
+                    variant="ghost"
+                    size="large"
+                    tabIndex={expanded() ? -1 : 0}
+                    onClick={props.onOpenProject}
+                    aria-label={typeof props.openProjectLabel === "string" ? props.openProjectLabel : undefined}
+                  />
+                </Tooltip>
+              </div>
             </div>
-            <DragOverlay>{props.renderProjectOverlay()}</DragOverlay>
-          </DragDropProvider>
-        </div>
-        <div class="shrink-0 w-full pt-3 pb-6 flex flex-col items-center gap-2">
-          <TooltipKeybind placement={placement()} title={props.settingsLabel()} keybind={props.settingsKeybind() ?? ""}>
-            <IconButton
-              icon="settings-gear"
-              variant="ghost"
-              size="large"
-              onClick={props.onOpenSettings}
-              aria-label={props.settingsLabel()}
-            />
-          </TooltipKeybind>
-          <Tooltip placement={placement()} value={props.helpLabel()}>
-            <IconButton
-              icon="help"
-              variant="ghost"
-              size="large"
-              onClick={props.onOpenHelp}
-              aria-label={props.helpLabel()}
-            />
-          </Tooltip>
-        </div>
-      </div>
-
-      <div
-        ref={(el) => {
-          panel = el
-        }}
-        classList={{ "flex-1 flex h-full min-h-0 min-w-0 overflow-hidden": true, "pointer-events-none": !expanded() }}
-        aria-hidden={!expanded()}
-      >
-        {props.renderPanel()}
+          </div>
+        </section>
+        {actions}
       </div>
     </div>
   )
+}
+
+function SidebarProjectSlot(props: {
+  projects: Accessor<LocalProject[]>
+  worktree: string
+  render: (project: Accessor<LocalProject>) => JSX.Element
+}) {
+  const initial = props.projects().find((project) => project.worktree === props.worktree)
+  if (!initial) return
+  const project = createMemo<LocalProject>(
+    (previous) => props.projects().find((project) => project.worktree === props.worktree) ?? previous,
+    initial,
+  )
+  return props.render(project)
 }
