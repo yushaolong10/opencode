@@ -148,8 +148,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
           <div
             ref={(element) => {
               editor = element
-              props.controller.setEditor(element)
               renderPromptInputV2Editor(element, props.controller.parts())
+              props.controller.setEditor(element)
             }}
             data-component="prompt-input"
             role="textbox"
@@ -170,8 +170,14 @@ export function PromptInputV2(props: PromptInputV2Props) {
               localInput = true
               props.controller.onInput(prompt.map((part) => part.content).join(""), [...prompt, ...images], cursor)
             }}
-            onCompositionStart={() => setComposing(true)}
-            onCompositionEnd={() => setComposing(false)}
+            onCompositionStart={() => {
+              setComposing(true)
+              props.controller.setComposing(true)
+            }}
+            onCompositionEnd={() => {
+              setComposing(false)
+              props.controller.setComposing(false)
+            }}
             onKeyDown={(event) => {
               const ime = event.isComposing || composing() || event.keyCode === 229
               if (ime && event.key === "Enter") return
@@ -186,6 +192,10 @@ export function PromptInputV2(props: PromptInputV2Props) {
             onPointerUp={updateCursor}
             onPaste={props.controller.onPaste}
             onFocus={() => props.controller.dispatch({ type: "focus.editor" })}
+            onBlur={() => {
+              setComposing(false)
+              props.controller.setComposing(false)
+            }}
           />
           <Show when={!props.controller.value()}>
             <div

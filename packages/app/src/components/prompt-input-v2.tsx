@@ -354,6 +354,16 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     onEditor(element) {
       editor = element as HTMLDivElement
       props.ref?.(editor)
+      // Solid invokes refs before insertion, so wait until focus() can take effect.
+      queueMicrotask(() => {
+        if (!editor?.isConnected || dialog.active) return
+        const active = document.activeElement
+        const idle = !active || active === document.body || active === document.documentElement
+        const newSessionSource = active instanceof HTMLElement && active.matches("[data-new-session-focus-pending]")
+        if (!idle && !newSessionSource) return
+        if (newSessionSource) active.removeAttribute("data-new-session-focus-pending")
+        editor.focus({ preventScroll: true })
+      })
     },
     onSuggestionSelect(item) {
       if (item.kind !== "command") return

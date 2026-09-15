@@ -231,6 +231,8 @@ const ProjectTile = (props: {
             icon={<IconV2 name="plus" size="small" />}
             variant="ghost-muted"
             size="small"
+            data-action="project-new-session"
+            data-new-session-focus-source=""
             class="absolute end-1 top-2 size-6 rounded-md opacity-0 pointer-events-none group-hover/project:opacity-100 group-hover/project:pointer-events-auto group-focus-within/project:opacity-100 group-focus-within/project:pointer-events-auto"
             aria-label={props.language.t("command.session.new")}
             onClick={(event) => {

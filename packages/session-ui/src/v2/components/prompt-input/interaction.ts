@@ -71,6 +71,7 @@ export function createPromptInputV2Controller(input: {
 }) {
   let editor: HTMLElement | undefined
   let fileInput: HTMLInputElement | undefined
+  let composing = false
   const draft = createPromptInputV2Store(input.store)
   const [state, setState] = input.state ?? createPromptInputV2State()
   if (input.identity) {
@@ -201,7 +202,7 @@ export function createPromptInputV2Controller(input: {
       type: "key.down",
       key: event.key,
       ctrl: event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey,
-      composing: event.isComposing,
+      composing: event.isComposing || composing || event.keyCode === 229,
       ids: suggestions().map((item) => item.id),
       empty: draft.state.prompt.every((part) => !("content" in part) || part.content.length === 0),
     })
@@ -245,6 +246,7 @@ export function createPromptInputV2Controller(input: {
 
   const restoreFocus = (cursor = draft.state.cursor ?? promptLength(draft.state.prompt)) => {
     requestAnimationFrame(() => {
+      if (composing) return
       editor?.focus()
       setEditorCursor(editor, cursor)
     })
@@ -335,7 +337,11 @@ export function createPromptInputV2Controller(input: {
     },
     setEditor(element: HTMLElement) {
       editor = element
+      composing = false
       input.onEditor?.(element)
+    },
+    setComposing(value: boolean) {
+      composing = value
     },
     restoreFocus,
     onInput(value: string, prompt?: PromptInputV2PersistedState["prompt"], cursor?: number) {

@@ -292,6 +292,7 @@ export const NewSessionItem = (props: {
   const item = (
     <button
       type="button"
+      data-new-session-focus-source=""
       class={`flex items-center gap-2 min-w-0 w-full text-left focus:outline-none ${props.dense ? "py-0.5" : "py-1"}`}
       onClick={() => {
         props.navigateToNewSession()

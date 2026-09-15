@@ -225,6 +225,7 @@ const WorkspaceActions = (props: {
           size="small"
           class="size-6 rounded-md opacity-0 pointer-events-none group-hover/workspace:opacity-100 group-hover/workspace:pointer-events-auto group-focus-within/workspace:opacity-100 group-focus-within/workspace:pointer-events-auto"
           data-action="workspace-new-session"
+          data-new-session-focus-source=""
           data-workspace={base64Encode(props.directory)}
           aria-label={props.language.t("command.session.new")}
           onClick={(event) => {

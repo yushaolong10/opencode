@@ -355,7 +355,13 @@ export default function LegacyLayout(props: ParentProps) {
     }
     clearSidebarHoverState()
     layout.mobileSidebar.hide()
-    void tabs.newDraft({ server: server.key, directory })
+    const active = document.activeElement
+    const source = active instanceof HTMLElement && active.matches("[data-new-session-focus-source]") ? active : undefined
+    source?.setAttribute("data-new-session-focus-pending", "")
+    source?.addEventListener("blur", () => source.removeAttribute("data-new-session-focus-pending"), { once: true })
+    void tabs.newDraft({ server: server.key, directory }).catch(() =>
+      source?.removeAttribute("data-new-session-focus-pending"),
+    )
   }
 
   const navigateToSessionRoute = (session: Session) => {
@@ -2164,6 +2170,7 @@ export default function LegacyLayout(props: ParentProps) {
                         <div class="shrink-0 py-4">
                           <Button
                             size="large"
+                            data-new-session-focus-source=""
                             class="w-full"
                             onClick={() => {
                               const dir = worktree()
